@@ -1,0 +1,41 @@
+{
+    "supplier_name": "Витя",
+    "description": "Конфигурация для прайс-листа поставщика Витя",
+    "column_mapping": {
+        "Unnamed: 1": "name",
+        "Unnamed: 2": "color",
+        "Unnamed: 3": "price_usd",
+        "Unnamed: 4": "price_rub",
+        "курс": "article_vitya",
+        "Unnamed: 6": "balance",
+        "Unnamed: 7": "comment"
+    },
+    "ignore_columns": [
+        "12/07/2025\nРежим работы : пн- сб 9:30 до 17:00  \nРасчет в $ или рублями по курсу в день оплаты",
+        "Unnamed: 8",
+        "Unnamed: 9",
+        "Unnamed: 10"
+    ],
+    "settings": {
+        "skip_empty_rows": true,
+        "header_row": 0,
+        "auto_detect_headers": true,
+        "drop_na_columns": true,
+        "currency": "USD/RUB"
+    },
+    "data_types": {
+        "price_usd": "float",
+        "price_rub": "float",
+        "balance": "string",
+        "article_vitya": "int"
+    },
+    "validation": {
+        "required_columns": [
+            "article_vitya",
+            "name",
+            "price_usd"
+        ],
+        "price_min": 0,
+        "price_max": 100000
+    }
+}

@@ -1,0 +1,36 @@
+{
+    "supplier_name": "Автоматическая конфигурация",
+    "description": "Универсальная конфигурация с автоматическим определением столбцов",
+    "column_mapping": {
+        "article": "article",
+        "name": "name",
+        "price": "price",
+        "balance": "balance",
+        "category": "category",
+        "comment": "comment",
+        "supplier": "supplier",
+        "color": "color",
+        "version": "version"
+    },
+    "ignore_columns": [],
+    "settings": {
+        "skip_empty_rows": true,
+        "header_row": 0,
+        "auto_detect_headers": true,
+        "drop_na_columns": false
+    },
+    "data_types": {
+        "price": "float",
+        "balance": "int",
+        "article_dimi": "string",
+        "price_dimi_usd": "float"
+    },
+    "validation": {
+        "required_columns": [
+            "article",
+            "name"
+        ],
+        "price_min": 0,
+        "price_max": 50000
+    }
+}

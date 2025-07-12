@@ -192,3 +192,17 @@ cython_debug/
 #  refer to https://docs.cursor.com/context/ignore-files
 .cursorignore
 .cursorindexingignore
+
+# MiStockSync specific
+data/stock.db
+data/stock.db-*
+data/*_backup_*.db
+data/input/*.xlsx
+data/input/*.csv
+data/output/*
+logs/*.log
+.env
+
+# Temporary files
+*.tmp
+*~

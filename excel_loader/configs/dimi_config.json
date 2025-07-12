@@ -1,0 +1,53 @@
+{
+    "supplier_name": "Дима",
+    "description": "Конфигурация для прайс-листа поставщика Дима (DiMi)",
+    "column_mapping": {
+        "Unnamed: 0": "category",
+        " ": "article_dimi",
+        "Unnamed: 2": "article_dimi2",
+        "Unnamed: 3": "name",
+        "Unnamed: 4": "color",
+        "Unnamed: 5": "col_in_box",
+        "Unnamed: 7": "balance",
+        "Unnamed: 8": "balance1",
+        "Unnamed: 9": "price_usd",
+        "Unnamed: 10": "price_rub",
+        "Unnamed: 14": "comment"
+    },
+    "ignore_columns": [
+        "Unnamed: 6",
+        "Unnamed: 11",
+        "Unnamed: 13",
+        "Курс"
+    ],
+    "settings": {
+        "skip_empty_rows": true,
+        "header_row": 0,
+        "auto_detect_headers": true,
+        "drop_na_columns": false,
+        "currency": "USD/RUB"
+    },
+    "data_types": {
+        "price_usd": "float",
+        "price_rub": "float",
+        "price": "float",
+        "balance": "string",
+        "balance1": "string",
+        "col_in_box": "int",
+        "article_dimi": "string",
+        "article": "string",
+        "category": "string",
+        "name": "string",
+        "color": "string",
+        "comment": "string"
+    },
+    "validation": {
+        "required_columns": [
+            "article_dimi",
+            "name",
+            "price_usd"
+        ],
+        "price_min": 0,
+        "price_max": 50000
+    }
+}

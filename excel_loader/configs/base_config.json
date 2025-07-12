@@ -1,0 +1,75 @@
+{
+    "supplier_name": "Основная база",
+    "description": "Конфигурация для основной базы данных товаров",
+    "column_mapping": {
+        "Артикул": "article",
+        "Наименование": "name",
+        "Цена": "price",
+        "Поставщик": "supplier",
+        "Кол-во": "quantity",
+        "Цвет ": "color",
+        "Версия": "version",
+        "Артикул Дима": "article_dimi",
+        "Цена Дима в $": "price_dimi_usd",
+        "Артикул Витя": "article_vitya",
+        "Цена Витя в $": "price_vitya_usd",
+        "Артикул Мила": "article_mila",
+        "Цена Мила в $": "price_mila_usd",
+        "Цена Витя в руб": "price_vitya_rub",
+        "Цена Мила в руб": "price_mila_rub",
+        "Цена Дима в руб": "price_dimi_rub",
+        "Кол-во в коробке": "quantity_per_box",
+        "Разница цены у поставщиков": "price_difference",
+        "Приоритет": "priority",
+        "Стоимость ОЗОН": "ozon_cost",
+        "Комиссия ОЗОН": "ozon_commission",
+        "Вознаграждение ОЗОН": "ozon_reward",
+        "Эквайринг, 1,9 %": "acquiring",
+        "Обработка  (ПВЗ) и Доставка до места выдачи ": "delivery_processing",
+        "Логистика (до 1л-80р; +1л-18р)": "logistics",
+        "Возвраты и отмены": "returns_cancels",
+        "К начислению за товар": "to_charge",
+        "Прибыль": "profit",
+        "Маржа в %": "margin_percent"
+    },
+    "ignore_columns": [
+        "Изображение",
+        "Итого",
+        "81",
+        "Кол-во в коробке",
+        "Кол-во в коробке 2"
+    ],
+    "settings": {
+        "skip_empty_rows": true,
+        "header_row": 0,
+        "auto_detect_headers": true,
+        "drop_na_columns": true,
+        "currency": "RUB/USD"
+    },
+    "data_types": {
+        "article": "int",
+        "article_vitya": "int",
+        "article_dimi": "string",
+        "article_mila": "int",
+        "price": "float",
+        "quantity": "int",
+        "price_dimi_usd": "float",
+        "price_vitya_usd": "float",
+        "price_mila_usd": "float",
+        "price_vitya_rub": "float",
+        "price_mila_rub": "float",
+        "price_dima_rub": "float",
+        "quantity_per_box": "int",
+        "priority": "int",
+        "margin_percent": "float"
+    },
+    "validation": {
+        "required_columns": [
+            "article",
+            "name",
+            "price"
+        ],
+        "price_min": 0,
+        "price_max": 1000000
+    }
+}
