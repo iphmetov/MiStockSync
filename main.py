@@ -10,6 +10,16 @@ import os
 import pandas as pd
 from datetime import datetime
 import logging
+import json
+import shutil
+
+# Опциональные импорты для точечного обновления Excel
+try:
+    from openpyxl import load_workbook
+
+    OPENPYXL_AVAILABLE = True
+except ImportError:
+    OPENPYXL_AVAILABLE = False
 
 # Добавляем путь к модулю excel_loader
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "excel_loader"))
@@ -28,8 +38,8 @@ except ImportError as e:
 # КОНСТАНТЫ ДЛЯ ФИЛЬТРАЦИИ ДАННЫХ
 # ================================
 
-# Для фильтрации баланса Вити
-VITYA_BALANCE_AVAILABLE = "Имеются в нал."
+# Для фильтрации баланса Вити - список допустимых статусов
+VITYA_BALANCE_AVAILABLE = ["Имеются в нал.", "Распродажа"]
 
 # Для фильтрации баланса Димы
 DIMI_BALANCE_EXPECTED = "Ожидается"
@@ -37,15 +47,23 @@ DIMI_BALANCE_EXPECTED = "Ожидается"
 # Минимальная цена для фильтрации (исключаем 0 и NaN)
 MIN_PRICE_THRESHOLD = 0.01
 
+# Константы для обновления цен (из notebook)
+MIN_PRICE_CHANGE_PERCENT = 0.1  # Минимальное изменение для обновления
+MAX_PRICE_CHANGE_PERCENT = 100.0  # Максимальное разрешенное изменение
+SIGNIFICANT_CHANGE_PERCENT = 20.0  # Порог "значительного" изменения
+
 
 class MiStockSyncApp:
     def __init__(self, root):
         self.root = root
-        self.root.title("MiStockSync - Управление прайсами")
-        self.root.geometry("800x600")
+        # Заголовок устанавливается в main()
+        self.root.geometry("1000x800")
 
         # Настройка логирования
         self.setup_logging()
+
+        # Загружаем настройки из файла
+        self.settings = self.load_settings()
 
         # Данные
         self.current_df = None
@@ -53,6 +71,10 @@ class MiStockSyncApp:
         self.base_df = None
         self.auto_load_base = tk.BooleanVar(value=True)  # Чекбокс автозагрузки базы
         self.comparison_result = None  # Результаты сравнения
+
+        # Настройки интерфейса (применяем загруженные настройки)
+        self.current_font_size = self.settings.get("font_size", "normal")
+        self.auto_load_base_enabled = self.settings.get("auto_load_base", True)
 
         # Создаем интерфейс
         self.create_widgets()
@@ -99,8 +121,53 @@ class MiStockSyncApp:
         self.logger.info("🚀 MiStockSync запущен")
         self.logger.info("📋 Система логирования настроена")
 
+    def load_settings(self):
+        """Загрузка настроек из файла settings.json"""
+        settings_file = "settings.json"
+        default_settings = {"auto_load_base": True, "font_size": "normal"}
+
+        try:
+            if os.path.exists(settings_file):
+                with open(settings_file, "r", encoding="utf-8") as f:
+                    settings = json.load(f)
+
+                # Проверяем наличие всех нужных ключей
+                for key, default_value in default_settings.items():
+                    if key not in settings:
+                        settings[key] = default_value
+
+                self.logger.info(f"⚙️ Настройки загружены из {settings_file}")
+                return settings
+            else:
+                self.logger.info(
+                    "⚙️ Файл настроек не найден, используются значения по умолчанию"
+                )
+                return default_settings
+
+        except Exception as e:
+            self.logger.error(f"❌ Ошибка загрузки настроек: {e}")
+            return default_settings
+
+    def save_settings(self, settings):
+        """Сохранение настроек в файл settings.json"""
+        settings_file = "settings.json"
+
+        try:
+            with open(settings_file, "w", encoding="utf-8") as f:
+                json.dump(settings, f, indent=2, ensure_ascii=False)
+
+            self.logger.info(f"💾 Настройки сохранены в {settings_file}")
+            return True
+
+        except Exception as e:
+            self.logger.error(f"❌ Ошибка сохранения настроек: {e}")
+            return False
+
     def create_widgets(self):
         """Создание элементов интерфейса"""
+
+        # Создаем главное меню
+        self.create_menu()
 
         # Главный фрейм
         main_frame = ttk.Frame(self.root, padding="10")
@@ -110,7 +177,7 @@ class MiStockSyncApp:
         self.root.columnconfigure(0, weight=1)
         self.root.rowconfigure(0, weight=1)
         main_frame.columnconfigure(1, weight=1)
-        main_frame.rowconfigure(2, weight=1)
+        main_frame.rowconfigure(3, weight=1)
 
         # Заголовок
         title_label = ttk.Label(
@@ -118,12 +185,25 @@ class MiStockSyncApp:
             text="MiStockSync - Синхронизация прайсов",
             font=("Arial", 16, "bold"),
         )
-        title_label.grid(row=0, column=0, columnspan=3, pady=(0, 20))
+        title_label.grid(row=0, column=0, columnspan=3, pady=(0, 10))
+
+        # Мини-панель инструментов
+        toolbar_frame = ttk.Frame(main_frame)
+        toolbar_frame.grid(
+            row=1, column=0, columnspan=3, sticky=(tk.W, tk.E), pady=(0, 10)
+        )
+
+        # Контейнер для инструментов (прижатый к левому краю)
+        tools_container = ttk.Frame(toolbar_frame)
+        tools_container.grid(row=0, column=0, sticky=tk.W)
+
+        # Оставляем toolbar для будущих быстрых действий (пока пустой)
+        # TODO: Добавить кнопки быстрого доступа к основным функциям
 
         # Выбор конфигурации
         config_frame = ttk.LabelFrame(main_frame, text="Выбор поставщика", padding="10")
         config_frame.grid(
-            row=1, column=0, columnspan=3, sticky=(tk.W, tk.E), pady=(0, 10)
+            row=2, column=0, columnspan=3, sticky=(tk.W, tk.E), pady=(0, 10)
         )
         config_frame.columnconfigure(1, weight=1)
 
@@ -145,15 +225,10 @@ class MiStockSyncApp:
             buttons_frame, text="📁 Выбрать файл", command=self.select_file
         ).grid(row=0, column=0, padx=(0, 5))
 
-        # НОВЫЙ ЧЕКБОКС ВМЕСТО КНОПКИ
-        ttk.Checkbutton(
-            buttons_frame, text="📊 Загрузка базы авто", variable=self.auto_load_base
-        ).grid(row=0, column=1, sticky=tk.W)
-
         # Область вывода информации
         info_frame = ttk.LabelFrame(main_frame, text="Информация о файле", padding="10")
         info_frame.grid(
-            row=2, column=0, columnspan=3, sticky=(tk.W, tk.E, tk.N, tk.S), pady=(0, 10)
+            row=3, column=0, columnspan=3, sticky=(tk.W, tk.E, tk.N, tk.S), pady=(0, 10)
         )
         info_frame.columnconfigure(0, weight=1)
         info_frame.rowconfigure(0, weight=1)
@@ -161,26 +236,48 @@ class MiStockSyncApp:
         self.info_text = scrolledtext.ScrolledText(info_frame, width=80, height=15)
         self.info_text.grid(row=0, column=0, sticky=(tk.W, tk.E, tk.N, tk.S))
 
+        # Применяем загруженный размер шрифта
+        self.apply_font_size(self.current_font_size)
+
         # Кнопки действий
         action_frame = ttk.Frame(main_frame)
         action_frame.grid(
-            row=3, column=0, columnspan=3, sticky=(tk.W, tk.E), pady=(10, 0)
+            row=4, column=0, columnspan=3, sticky=(tk.W, tk.E), pady=(10, 0)
         )
 
-        ttk.Button(action_frame, text="🔄 Очистить", command=self.clear_info).grid(
-            row=0, column=0, sticky=tk.W
+        self.show_data_button = ttk.Button(
+            action_frame,
+            text="📋 Показать данные",
+            command=self.show_data_sample,
+            state="disabled",
         )
-        ttk.Button(
-            action_frame, text="📋 Показать данные", command=self.show_data_sample
-        ).grid(row=0, column=1, padx=(10, 0))
-        ttk.Button(
-            action_frame, text="💾 Сохранить обработанный", command=self.save_data
-        ).grid(row=0, column=2, padx=(10, 0))
-        ttk.Button(
-            action_frame, text="🔍 Сравнить с базой", command=self.compare_with_base
-        ).grid(row=0, column=3, padx=(10, 0))
+        self.show_data_button.grid(row=0, column=0, sticky=tk.W)
+
+        self.save_data_button = ttk.Button(
+            action_frame,
+            text="💾 Сохранить обработанный",
+            command=self.save_data,
+            state="disabled",
+        )
+        self.save_data_button.grid(row=0, column=1, padx=(10, 0))
+
+        self.compare_button = ttk.Button(
+            action_frame,
+            text="🔍 Сравнить с базой",
+            command=self.compare_with_base,
+            state="disabled",
+        )
+        self.compare_button.grid(row=0, column=2, padx=(10, 0))
 
         # Новые кнопки после сравнения
+        self.update_prices_button = ttk.Button(
+            action_frame,
+            text="🏷️ Обновить цены",
+            command=self.update_prices,
+            state="disabled",
+        )
+        self.update_prices_button.grid(row=0, column=3, padx=(10, 0))
+
         self.report_button = ttk.Button(
             action_frame,
             text="📊 Сохранить отчет",
@@ -190,18 +287,118 @@ class MiStockSyncApp:
         self.report_button.grid(row=0, column=4, padx=(10, 0))
 
         self.add_to_base_button = ttk.Button(
-            action_frame, text="📥 Добавить в базу", command=self.add_to_base
+            action_frame,
+            text="📥 Добавить новый товар в базу",
+            command=self.add_to_base,
+            state="disabled",
         )
         self.add_to_base_button.grid(row=0, column=5, padx=(10, 0))
 
-        # Статус бар
-        self.status_var = tk.StringVar(value="Готов к работе")
-        status_bar = ttk.Label(
-            main_frame, textvariable=self.status_var, relief=tk.SUNKEN, anchor=tk.W
+        # Продвинутый статус-бар
+        self.create_advanced_status_bar(main_frame)
+
+    def create_menu(self):
+        """Создание главного меню приложения"""
+
+        # Создаем главное меню
+        self.menubar = tk.Menu(self.root)
+
+        # === МЕНЮ "ФАЙЛ" ===
+        file_menu = tk.Menu(self.menubar, tearoff=0)
+        file_menu.add_command(
+            label="📁 Открыть файл", command=self.select_file, accelerator="Ctrl+O"
         )
-        status_bar.grid(
-            row=4, column=0, columnspan=3, sticky=(tk.W, tk.E), pady=(10, 0)
+        file_menu.add_separator()
+        file_menu.add_command(
+            label="⚙️ Настройки", command=self.show_settings, accelerator="Ctrl+,"
         )
+        file_menu.add_separator()
+        file_menu.add_command(
+            label="🚪 Выход", command=self.quit_application, accelerator="Ctrl+Q"
+        )
+        self.menubar.add_cascade(label="📁 Файл", menu=file_menu)
+
+        # === МЕНЮ "ПРАВКА" ===
+        edit_menu = tk.Menu(self.menubar, tearoff=0)
+        edit_menu.add_command(
+            label="✂️ Вырезать", command=self.cut_text, accelerator="Ctrl+X"
+        )
+        edit_menu.add_command(
+            label="📋 Копировать", command=self.copy_text, accelerator="Ctrl+C"
+        )
+        edit_menu.add_separator()
+        edit_menu.add_command(
+            label="🔘 Выделить все", command=self.select_all_text, accelerator="Ctrl+A"
+        )
+        edit_menu.add_command(
+            label="🔄 Инвертировать выделенное",
+            command=self.invert_selection,
+            accelerator="Ctrl+I",
+        )
+        self.menubar.add_cascade(label="✏️ Правка", menu=edit_menu)
+
+        # === МЕНЮ "ВИД" ===
+        view_menu = tk.Menu(self.menubar, tearoff=0)
+        view_menu.add_command(
+            label="🧹 Очистить", command=self.clear_info, accelerator="Ctrl+L"
+        )
+        view_menu.add_command(
+            label="🔄 Обновить", command=self.refresh_interface, accelerator="F5"
+        )
+        view_menu.add_separator()
+
+        # Подменю размеров шрифта
+        font_menu = tk.Menu(view_menu, tearoff=0)
+        font_menu.add_command(
+            label="📝 Обычный шрифт", command=lambda: self.change_font_size("normal")
+        )
+        font_menu.add_command(
+            label="📄 Средний шрифт", command=lambda: self.change_font_size("medium")
+        )
+        font_menu.add_command(
+            label="📊 Крупный шрифт", command=lambda: self.change_font_size("large")
+        )
+        view_menu.add_cascade(label="🔤 Размер шрифта", menu=font_menu)
+
+        self.menubar.add_cascade(label="👁️ Вид", menu=view_menu)
+
+        # === МЕНЮ "СПРАВКА" ===
+        help_menu = tk.Menu(self.menubar, tearoff=0)
+        help_menu.add_command(
+            label="📖 Помощь", command=self.show_help, accelerator="F1"
+        )
+        help_menu.add_separator()
+        help_menu.add_command(
+            label="ℹ️ О программе", command=self.show_about, accelerator="Ctrl+F1"
+        )
+        self.menubar.add_cascade(label="❓ Справка", menu=help_menu)
+
+        # Привязываем меню к окну
+        self.root.config(menu=self.menubar)
+
+        # Горячие клавиши
+        self.setup_hotkeys()
+
+    def setup_hotkeys(self):
+        """Настройка горячих клавиш"""
+        # Файл
+        self.root.bind("<Control-o>", lambda e: self.select_file())
+        self.root.bind("<Control-comma>", lambda e: self.show_settings())
+        self.root.bind("<Control-q>", lambda e: self.quit_application())
+
+        # Правка
+        self.root.bind("<Control-x>", lambda e: self.cut_text())
+        self.root.bind("<Control-c>", lambda e: self.copy_text())
+        self.root.bind("<Control-a>", lambda e: self.select_all_text())
+        self.root.bind("<Control-i>", lambda e: self.invert_selection())
+
+        # Вид
+        self.root.bind("<Control-l>", lambda e: self.clear_info())
+        self.root.bind("<F5>", lambda e: self.refresh_interface())
+
+        # Справка
+        self.root.bind("<F1>", lambda e: self.show_help())
+        self.root.bind("<Control-F1>", lambda e: self.show_about())
 
     def load_available_configs(self):
         """Загрузка списка доступных конфигураций"""
@@ -260,19 +457,40 @@ class MiStockSyncApp:
             return
 
         try:
-            self.status_var.set("Загрузка файла...")
-            self.root.update()
+            # Запускаем красивый прогресс-бар для загрузки
+            self.start_progress("Загрузка файла", 5, "file")
 
-            # Загружаем файл с определенным конфигом
+            # Шаг 1: Подготовка
+            self.update_progress(1, "Подготовка к загрузке")
             from excel_loader.loader import load_with_config
 
+            # Шаг 2: Загрузка Excel файла
+            self.update_progress(2, "Чтение Excel файла")
             df = load_with_config(file_path, config_name)
 
             if df is not None:
+                # Шаг 3: Обработка данных
+                self.update_progress(3, "Обработка данных")
                 self.current_df = df
                 self.current_config = config_name
+
+                # Шаг 4: Отображение информации
+                self.update_progress(4, "Подготовка отображения")
                 self.show_file_info(df, config_name)
-                self.status_var.set("Файл загружен успешно")
+
+                # Шаг 5: Финализация
+                self.update_progress(5, "Завершение загрузки")
+
+                # Обновляем состояние кнопок
+                self.update_buttons_state()
+
+                # Завершаем с красивым сообщением
+                rows = len(df)
+                cols = len(df.columns)
+                size_mb = df.memory_usage(deep=True).sum() / 1024 / 1024
+                self.finish_progress(
+                    f"✅ Загружено: {rows:,} строк, {cols} столбцов ({size_mb:.1f} МБ)"
+                )
 
                 # Сбрасываем конфигурацию на "auto" для следующей загрузки
                 if "auto" in self.config_combo["values"]:
@@ -281,11 +499,13 @@ class MiStockSyncApp:
                         "🔄 Конфигурация сброшена на 'auto' для следующей загрузки"
                     )
             else:
-                self.status_var.set("Файл не загружен")
+                self.finish_progress("Файл не был загружен", auto_reset=False)
+                self.set_status("Файл не загружен", "error")
 
         except Exception as e:
             self.log_error(f"Ошибка загрузки файла: {e}")
-            self.status_var.set("Ошибка загрузки")
+            self.finish_progress("Ошибка загрузки файла", auto_reset=False)
+            self.set_status(f"Ошибка: {str(e)}", "error")
 
     def load_largest(self):
         """Загрузка самого большого файла"""
@@ -294,7 +514,7 @@ class MiStockSyncApp:
         data_dir = "data/input"
 
         try:
-            self.status_var.set("Поиск самого большого файла...")
+            self.set_status("Поиск самого большого файла...", "loading")
             self.root.update()
 
             # Находим самый большой файл
@@ -306,17 +526,20 @@ class MiStockSyncApp:
                     excel_files.append((file_path, file_size))
 
             if not excel_files:
-                self.status_var.set("Файлы не найдены")
+                self.log_error("Excel файлы не найдены в data/input")
+                self.set_status("Файлы не найдены", "warning")
                 return
 
-            largest_file_path = max(excel_files, key=lambda x: x[1])[0]
+            # Сортируем по размеру и берем самый большой
+            excel_files.sort(key=lambda x: x[1], reverse=True)
+            largest_file_path, largest_size = excel_files[0]
 
-            # НОВОЕ: Автоматически определяем конфиг для самого большого файла
-            if self.config_var.get() == "auto":
-                detected_config = self.auto_select_config(largest_file_path)
-                config_name = detected_config
-            else:
-                config_name = self.config_var.get()
+            self.log_info(
+                f"Найден самый большой файл: {os.path.basename(largest_file_path)} ({largest_size} bytes)"
+            )
+
+            # Автоматически определяем конфиг
+            config_name = self.auto_select_config(largest_file_path)
 
             from excel_loader.loader import load_with_config
 
@@ -326,18 +549,22 @@ class MiStockSyncApp:
                 self.current_df = df
                 self.current_config = config_name
                 self.show_file_info(df, config_name)
-                self.status_var.set("Самый большой файл загружен")
+                self.set_status("Самый большой файл загружен", "success")
+
+                # Обновляем состояние кнопок
+                self.update_buttons_state()
             else:
-                self.status_var.set("Файл не загружен")
+                self.set_status("Файл не загружен", "error")
 
         except Exception as e:
             self.log_error(f"Ошибка загрузки самого большого файла: {e}")
-            self.status_var.set("Ошибка загрузки")
+            self.set_status("Ошибка загрузки", "error")
 
     def show_file_info(self, df, config_name):
         """Показ информации о загруженном файле"""
         self.log_info(f"📊 Отображение информации о файле (конфиг: {config_name})")
-        self.clear_info()
+        # Очищаем только текстовое поле, НЕ сбрасывая данные
+        self.info_text.delete(1.0, tk.END)
 
         # Основная информация
         info = f"📊 ИНФОРМАЦИЯ О ФАЙЛЕ\n"
@@ -383,7 +610,8 @@ class MiStockSyncApp:
             messagebox.showwarning("Предупреждение", "Сначала загрузите файл")
             return
 
-        self.clear_info()
+        # Очищаем только текстовое поле, НЕ сбрасывая данные
+        self.info_text.delete(1.0, tk.END)
 
         df = self.current_df
 
@@ -447,8 +675,7 @@ class MiStockSyncApp:
 
         if file_path:
             try:
-                self.status_var.set("Предобработка данных...")
-                self.root.update()
+                self.set_status("Предобработка данных...", "save")
 
                 # Предобрабатываем данные перед сохранением
                 processed_df = self.preprocess_supplier_data(
@@ -467,12 +694,12 @@ class MiStockSyncApp:
                 messagebox.showinfo(
                     "Успех", f"Обработанные данные сохранены в {file_path}"
                 )
-                self.status_var.set("Готов к работе")
+                self.set_status("Готов к работе", "info")
 
             except Exception as e:
                 self.log_error(f"Ошибка сохранения: {e}")
                 messagebox.showerror("Ошибка", f"Не удалось сохранить файл: {e}")
-                self.status_var.set("Ошибка сохранения")
+                self.set_status("Ошибка сохранения", "error")
 
     def compare_with_base(self):
         """Сравнение текущего файла с базой данных"""
@@ -485,10 +712,9 @@ class MiStockSyncApp:
             )
             return
 
-        # Автозагрузка базы (как описано выше)
-        # НОВАЯ ЛОГИКА: проверяем чекбокс
-        if self.auto_load_base.get():
-            self.status_var.set("Автозагрузка базы данных...")
+        # НОВАЯ ЛОГИКА: проверяем настройку автозагрузки
+        if self.auto_load_base_enabled:
+            self.set_status("Автозагрузка базы данных...", "loading")
             self.root.update()
 
             # Загружаем базу данных если еще не загружена
@@ -502,15 +728,16 @@ class MiStockSyncApp:
 
                 self.log_info("База данных автоматически загружена")
         else:
-            # Если чекбокс выключен, база должна быть загружена вручную
+            # Если автозагрузка выключена, база должна быть загружена вручную
             if self.base_df is None:
                 messagebox.showwarning(
-                    "Предупреждение", "Сначала загрузите базу данных"
+                    "Предупреждение",
+                    "Сначала загрузите базу данных или включите автозагрузку в настройках",
                 )
                 return
 
         # НОВОЕ: Предобработка данных поставщика
-        self.status_var.set("Предобработка данных поставщика...")
+        self.set_status("Предобработка данных поставщика...", "loading")
         self.root.update()
 
         processed_supplier_df = self.preprocess_supplier_data(
@@ -518,7 +745,7 @@ class MiStockSyncApp:
         )
 
         # Выполняем сравнение с предобработанными данными
-        self.status_var.set("Сравнение с базой...")
+        self.set_status("Сравнение с базой...", "compare")
         self.root.update()
 
         comparison_result = self.perform_comparison(processed_supplier_df, self.base_df)
@@ -534,11 +761,10 @@ class MiStockSyncApp:
             )
             self.log_info("❌ Кнопка 'Сохранить отчет' НЕ активирована из-за ошибки")
         else:
-            self.log_info("🔘 Активируем кнопку 'Сохранить отчет'...")
-            self.report_button.config(state="normal")
-            self.log_info("✅ Кнопка 'Сохранить отчет' активирована")
+            self.log_info("🔘 Активируем кнопки после успешного сравнения...")
+            self.update_buttons_state()
 
-        self.status_var.set("Сравнение завершено")
+        self.set_status("Сравнение завершено", "success")
 
     def perform_comparison(self, supplier_df, base_df):
         """Выполняет сравнение файла поставщика с базой данных"""
@@ -681,7 +907,8 @@ class MiStockSyncApp:
             messagebox.showerror("Ошибка", result["error"])
             return
 
-        self.clear_info()
+        # Очищаем только текстовое поле, НЕ сбрасывая данные
+        self.info_text.delete(1.0, tk.END)
 
         info = f"🔍 РЕЗУЛЬТАТЫ СРАВНЕНИЯ С БАЗОЙ ДАННЫХ\n"
         info += f"{'='*60}\n"
@@ -868,15 +1095,16 @@ class MiStockSyncApp:
         self.log_info("💰 Фильтруем по цене...")
         processed_df = self.filter_by_price(processed_df, "price_usd")
 
-        # 2. Фильтрация по балансу - оставляем только товары в наличии
+        # 2. Фильтрация по балансу - оставляем только товары в наличии И на распродаже
         if "balance" in processed_df.columns:
             self.log_info(
-                f"📦 Фильтруем по балансу (оставляем только '{VITYA_BALANCE_AVAILABLE}')..."
+                f"📦 Фильтруем по балансу (оставляем только {VITYA_BALANCE_AVAILABLE})..."
             )
 
             balance_before = len(processed_df)
+            # Новая логика: фильтруем по списку значений
             processed_df = processed_df[
-                processed_df["balance"] == VITYA_BALANCE_AVAILABLE
+                processed_df["balance"].isin(VITYA_BALANCE_AVAILABLE)
             ].copy()
             balance_after = len(processed_df)
 
@@ -884,6 +1112,12 @@ class MiStockSyncApp:
             if removed_balance > 0:
                 self.log_info(f"   📦 Удалено строк без наличия: {removed_balance}")
                 self.log_info(f"   📦 Осталось строк в наличии: {balance_after}")
+
+                # Показываем статистику по каждому типу баланса
+                for status in VITYA_BALANCE_AVAILABLE:
+                    status_count = (processed_df["balance"] == status).sum()
+                    if status_count > 0:
+                        self.log_info(f"      '{status}': {status_count} товаров")
             else:
                 self.log_info(f"   📦 Все {balance_after} строк имеют товары в наличии")
         else:
@@ -1162,8 +1396,67 @@ class MiStockSyncApp:
             return self.config_var.get()
 
     def clear_info(self):
-        """Очистка области информации"""
+        """Очистка области информации и сброс состояния"""
         self.info_text.delete(1.0, tk.END)
+
+        # Сбрасываем данные
+        self.current_df = None
+        self.base_df = None
+        self.comparison_result = None
+        self.current_config = None
+
+        # Обновляем состояние кнопок
+        self.update_buttons_state()
+
+        # Сбрасываем статус
+        self.set_status("Готов к работе", "info")
+
+        self.log_info("🧹 Интерфейс очищен, все данные сброшены")
+
+    def update_buttons_state(self, log_changes=True):
+        """Обновление состояния кнопок в зависимости от загруженных данных"""
+        # Кнопки, которые зависят от загруженного файла поставщика
+        file_loaded = self.current_df is not None
+        file_state = "normal" if file_loaded else "disabled"
+
+        self.show_data_button.config(state=file_state)
+        self.save_data_button.config(state=file_state)
+        self.compare_button.config(state=file_state)
+        self.update_prices_button.config(state=file_state)
+
+        # Кнопки, которые зависят от выполненного сравнения
+        comparison_done = self.comparison_result is not None
+        comparison_state = "normal" if comparison_done else "disabled"
+
+        self.report_button.config(state=comparison_state)
+
+        # Кнопка "Добавить новый товар в базу" активна только если есть новые товары
+        has_new_items = False
+        new_items_count = 0
+        if self.comparison_result is not None:
+            new_items = self.comparison_result.get("new_items", [])
+            new_items_count = len(new_items)
+            has_new_items = new_items_count > 0
+
+        add_to_base_state = "normal" if has_new_items else "disabled"
+        self.add_to_base_button.config(state=add_to_base_state)
+
+        # Логирование изменений (опционально)
+        if log_changes:
+            if file_loaded:
+                self.log_info("✅ Файл загружен - основные кнопки активны")
+            if comparison_done:
+                self.log_info("✅ Сравнение выполнено - кнопки отчетов активны")
+            if has_new_items:
+                self.log_info(
+                    f"📥 Обнаружено новых товаров: {new_items_count} - кнопка добавления активна"
+                )
+            elif comparison_done and not has_new_items:
+                self.log_info(
+                    "ℹ️ Новых товаров не найдено - кнопка добавления неактивна"
+                )
+            if not file_loaded and not comparison_done:
+                self.log_info("⚪ Данные отсутствуют - кнопки деактивированы")
 
     def log_info(self, message):
         """Логирование информации"""
@@ -1233,7 +1526,7 @@ class MiStockSyncApp:
         if file_path:
             try:
                 self.log_info("💾 Начинаем сохранение отчета...")
-                self.status_var.set("Сохранение отчета...")
+                self.set_status("Сохранение отчета...", "save")
                 self.root.update()
 
                 # Создаем сводную таблицу
@@ -1261,6 +1554,16 @@ class MiStockSyncApp:
                     summary_df = pd.DataFrame(summary_data)
                     summary_df.to_excel(writer, sheet_name="Сводка", index=False)
 
+                    # Настраиваем ширину столбцов для Сводки
+                    worksheet = writer.sheets["Сводка"]
+                    worksheet.column_dimensions["A"].width = 20  # Поставщик
+                    worksheet.column_dimensions["B"].width = 12  # Товаров
+                    worksheet.column_dimensions["C"].width = 15  # Совпадений
+                    worksheet.column_dimensions["D"].width = 18  # Процент совпадений
+                    worksheet.column_dimensions["E"].width = 15  # Изменений цен
+                    worksheet.column_dimensions["F"].width = 15  # Новых товаров
+                    worksheet.column_dimensions["G"].width = 20  # Совпадений по кодам
+
                     # Лист с совпадениями
                     if self.comparison_result["matches"]:
                         self.log_info(
@@ -1270,6 +1573,29 @@ class MiStockSyncApp:
                         matches_df.to_excel(
                             writer, sheet_name="Совпадения", index=False
                         )
+
+                        # Настраиваем ширину столбцов для Совпадений
+                        worksheet = writer.sheets["Совпадения"]
+                        # Ищем столбец с name и устанавливаем ширину 110
+                        if "name" in matches_df.columns:
+                            name_col_index = matches_df.columns.get_loc("name")
+                            name_col_letter = chr(
+                                65 + name_col_index
+                            )  # A=65, B=66, C=67...
+                            worksheet.column_dimensions[name_col_letter].width = 110
+
+                        # Устанавливаем стандартную ширину для остальных столбцов
+                        for i, col in enumerate(matches_df.columns):
+                            col_letter = chr(65 + i)
+                            if col != "name":  # name уже настроен выше
+                                if "article" in col.lower():
+                                    worksheet.column_dimensions[col_letter].width = 15
+                                elif "price" in col.lower() or "diff" in col.lower():
+                                    worksheet.column_dimensions[col_letter].width = 15
+                                elif "color" in col.lower():
+                                    worksheet.column_dimensions[col_letter].width = 20
+                                else:
+                                    worksheet.column_dimensions[col_letter].width = 18
 
                     # Лист с изменениями цен
                     if self.comparison_result["price_changes"]:
@@ -1283,6 +1609,29 @@ class MiStockSyncApp:
                             writer, sheet_name="Изменения цен", index=False
                         )
 
+                        # Настраиваем ширину столбцов для Изменений цен
+                        worksheet = writer.sheets["Изменения цен"]
+                        # Ищем столбец с name и устанавливаем ширину 110
+                        if "name" in price_changes_df.columns:
+                            name_col_index = price_changes_df.columns.get_loc("name")
+                            name_col_letter = chr(65 + name_col_index)
+                            worksheet.column_dimensions[name_col_letter].width = 110
+
+                        # Устанавливаем стандартную ширину для остальных столбцов
+                        for i, col in enumerate(price_changes_df.columns):
+                            col_letter = chr(65 + i)
+                            if col != "name":
+                                if "article" in col.lower():
+                                    worksheet.column_dimensions[col_letter].width = 15
+                                elif (
+                                    "price" in col.lower()
+                                    or "diff" in col.lower()
+                                    or "percent" in col.lower()
+                                ):
+                                    worksheet.column_dimensions[col_letter].width = 15
+                                else:
+                                    worksheet.column_dimensions[col_letter].width = 18
+
                     # Лист с новыми товарами
                     if self.comparison_result["new_items"]:
                         self.log_info(
@@ -1292,6 +1641,27 @@ class MiStockSyncApp:
                         new_items_df.to_excel(
                             writer, sheet_name="Новые товары", index=False
                         )
+
+                        # Настраиваем ширину столбцов для Новых товаров
+                        worksheet = writer.sheets["Новые товары"]
+                        # Ищем столбец с name и устанавливаем ширину 110
+                        if "name" in new_items_df.columns:
+                            name_col_index = new_items_df.columns.get_loc("name")
+                            name_col_letter = chr(65 + name_col_index)
+                            worksheet.column_dimensions[name_col_letter].width = 110
+
+                        # Устанавливаем стандартную ширину для остальных столбцов
+                        for i, col in enumerate(new_items_df.columns):
+                            col_letter = chr(65 + i)
+                            if col != "name":
+                                if "article" in col.lower():
+                                    worksheet.column_dimensions[col_letter].width = 15
+                                elif "price" in col.lower():
+                                    worksheet.column_dimensions[col_letter].width = 15
+                                elif "color" in col.lower() or "balance" in col.lower():
+                                    worksheet.column_dimensions[col_letter].width = 20
+                                else:
+                                    worksheet.column_dimensions[col_letter].width = 18
 
                     # Лист с совпадениями по кодам
                     if self.comparison_result.get("code_matches"):
@@ -1305,19 +1675,747 @@ class MiStockSyncApp:
                             writer, sheet_name="Совпадения по кодам", index=False
                         )
 
+                        # Настраиваем ширину столбцов для Совпадений по кодам
+                        worksheet = writer.sheets["Совпадения по кодам"]
+                        # Ищем столбцы с name и устанавливаем ширину 110
+                        for col_name in ["name", "supplier_name", "base_name"]:
+                            if col_name in code_matches_df.columns:
+                                name_col_index = code_matches_df.columns.get_loc(
+                                    col_name
+                                )
+                                name_col_letter = chr(65 + name_col_index)
+                                worksheet.column_dimensions[name_col_letter].width = 110
+
+                        # Устанавливаем стандартную ширину для остальных столбцов
+                        for i, col in enumerate(code_matches_df.columns):
+                            col_letter = chr(65 + i)
+                            if col not in ["name", "supplier_name", "base_name"]:
+                                if "article" in col.lower() or "code" in col.lower():
+                                    worksheet.column_dimensions[col_letter].width = 15
+                                elif "confidence" in col.lower():
+                                    worksheet.column_dimensions[col_letter].width = 15
+                                else:
+                                    worksheet.column_dimensions[col_letter].width = 18
+
+                    # Лист с предупреждениями (значительные изменения цен)
+                    warnings_data = []
+
+                    # Добавляем значительные изменения цен как предупреждения
+                    for change in self.comparison_result.get("price_changes", []):
+                        if (
+                            abs(change.get("price_change_percent", 0))
+                            > SIGNIFICANT_CHANGE_PERCENT
+                        ):
+                            warnings_data.append(
+                                {
+                                    "Тип предупреждения": "Значительное изменение цены",
+                                    "Артикул": change.get("article", ""),
+                                    "Наименование": change.get("name", ""),
+                                    "Цена базы": change.get("base_price", 0),
+                                    "Цена поставщика": change.get("supplier_price", 0),
+                                    "Изменение %": f"{change.get('price_change_percent', 0):+.1f}%",
+                                    "Разница": change.get("price_diff", 0),
+                                    "Описание": f"Изменение цены превышает {SIGNIFICANT_CHANGE_PERCENT}%",
+                                }
+                            )
+
+                    # Добавляем предупреждения о товарах без цены в базе
+                    for match in self.comparison_result.get("matches", []):
+                        if (
+                            match.get("base_price", 0) <= 0
+                            and match.get("supplier_price", 0) > 0
+                        ):
+                            warnings_data.append(
+                                {
+                                    "Тип предупреждения": "Отсутствует цена в базе",
+                                    "Артикул": match.get("article", ""),
+                                    "Наименование": match.get("name", ""),
+                                    "Цена базы": match.get("base_price", 0),
+                                    "Цена поставщика": match.get("supplier_price", 0),
+                                    "Изменение %": "Новая цена",
+                                    "Разница": match.get("supplier_price", 0),
+                                    "Описание": "В базе нет цены, но есть у поставщика",
+                                }
+                            )
+
+                    # Создаем лист Предупреждения если есть данные
+                    if warnings_data:
+                        self.log_info(
+                            f"📄 Создаем лист 'Предупреждения' ({len(warnings_data)} записей)..."
+                        )
+                        warnings_df = pd.DataFrame(warnings_data)
+                        warnings_df.to_excel(
+                            writer, sheet_name="Предупреждения", index=False
+                        )
+
+                        # Настраиваем ширину столбцов для Предупреждений
+                        worksheet = writer.sheets["Предупреждения"]
+                        worksheet.column_dimensions["A"].width = (
+                            25  # Тип предупреждения
+                        )
+                        worksheet.column_dimensions["B"].width = 15  # Артикул
+                        worksheet.column_dimensions["C"].width = (
+                            110  # Наименование (широкий)
+                        )
+                        worksheet.column_dimensions["D"].width = 15  # Цена базы
+                        worksheet.column_dimensions["E"].width = 18  # Цена поставщика
+                        worksheet.column_dimensions["F"].width = 15  # Изменение %
+                        worksheet.column_dimensions["G"].width = 12  # Разница
+                        worksheet.column_dimensions["H"].width = 40  # Описание
+                    else:
+                        self.log_info("ℹ️ Предупреждений для отчета не найдено")
+
                 self.log_info("✅ Excel файл создан успешно")
 
                 self.log_info(f"📊 Отчет сохранен: {file_path}")
                 self.log_info(f"   Листов создано: {len(summary_data)} + детализация")
                 messagebox.showinfo("Успех", f"Отчет сохранен в {file_path}")
-                self.status_var.set("Отчет сохранен")
+                self.set_status("Отчет сохранен", "success")
 
             except Exception as e:
                 self.log_error(f"Ошибка сохранения отчета: {e}")
                 messagebox.showerror("Ошибка", f"Не удалось сохранить отчет: {e}")
-                self.status_var.set("Ошибка сохранения отчета")
+                self.set_status("Ошибка сохранения отчета", "error")
         else:
             self.log_info("ℹ️ Сохранение отчета отменено пользователем")
+
+    def update_prices(self):
+        """Обновление цен в базе данных"""
+        self.log_info("🔄 Начало обновления цен в базе данных...")
+
+        # Проверяем, что данные загружены
+        if self.current_df is None:
+            self.log_error("❌ Файл поставщика не загружен")
+            messagebox.showwarning(
+                "Предупреждение", "Сначала загрузите файл поставщика"
+            )
+            return
+
+        if self.base_df is None:
+            self.log_info("📁 База данных не загружена, выполняем автозагрузку...")
+
+            # Автозагрузка базы данных (такая же логика, как в compare_with_base)
+            self.set_status("Автозагрузка базы данных...", "loading")
+            self.root.update()
+
+            data_dir = "data/input"
+            self.base_df = load_largest_file(data_dir, "base")
+
+            if self.base_df is None:
+                self.log_error("❌ Не удалось загрузить базу данных")
+                messagebox.showerror(
+                    "Ошибка", "Не удалось загрузить базу данных из data/input"
+                )
+                return
+
+            self.log_info("✅ База данных автоматически загружена для обновления цен")
+
+        if self.comparison_result is None:
+            self.log_info("📊 Результат сравнения отсутствует, выполняем сравнение...")
+
+            # Автоматически выполняем сравнение
+            self.set_status("Выполнение сравнения для обновления цен...", "compare")
+            self.root.update()
+
+            # Предобработка данных поставщика
+            processed_supplier_df = self.preprocess_supplier_data(
+                self.current_df, self.current_config
+            )
+
+            # Выполняем сравнение
+            comparison_result = self.perform_comparison(
+                processed_supplier_df, self.base_df
+            )
+
+            if "error" in comparison_result:
+                self.log_error(
+                    f"❌ Ошибка при автосравнении: {comparison_result['error']}"
+                )
+                messagebox.showerror(
+                    "Ошибка",
+                    f"Не удалось выполнить сравнение: {comparison_result['error']}",
+                )
+                return
+
+            # Сохраняем результат и показываем его
+            self.comparison_result = comparison_result
+            self.show_comparison_result(comparison_result)
+            self.update_buttons_state()
+
+            self.log_info("✅ Сравнение автоматически выполнено для обновления цен")
+
+        # Диалог выбора резервной копии
+        backup_choice = messagebox.askyesnocancel(
+            "Резервная копия",
+            "Создать резервную копию базы данных перед обновлением цен?\n\n"
+            "💡 Рекомендуется для безопасности данных\n\n"
+            "Да - выбрать папку для backup\n"
+            "Нет - обновить без backup\n"
+            "Отмена - прервать операцию",
+        )
+
+        if backup_choice is None:  # Отмена
+            self.log_info("❌ Обновление цен отменено пользователем")
+            return
+
+        backup_path = None
+        if backup_choice:  # Пользователь выбрал "Да"
+            from tkinter import filedialog
+
+            # Предзаполненное имя файла backup
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            default_name = f"BACKUP_base_{self.current_config}_{timestamp}.xlsx"
+
+            backup_path = filedialog.asksaveasfilename(
+                title="Выберите место для сохранения резервной копии",
+                defaultextension=".xlsx",
+                filetypes=[("Excel files", "*.xlsx"), ("All files", "*.*")],
+                initialfile=default_name,
+                initialdir="data/output",
+            )
+
+            if not backup_path:  # Пользователь отменил выбор папки
+                self.log_info(
+                    "❌ Обновление цен отменено - не выбрана папка для backup"
+                )
+                return
+
+        # Запускаем progress bar
+        self.start_progress("Анализ изменений цен", 7, "update")
+
+        # Проверяем наличие совпадений для обновления
+        self.update_progress(1, "Проверка совпадений")
+        matches = self.comparison_result.get("matches", [])
+        if not matches:
+            self.log_info("ℹ️ Нет совпадений для обновления цен")
+            self.finish_progress("Нет изменений для обновления", auto_reset=True)
+            messagebox.showinfo(
+                "Информация", "Нет совпадений товаров для обновления цен"
+            )
+            return
+
+        # Фильтруем товары, которые имеют изменения цен больше MIN_PRICE_CHANGE_PERCENT
+        price_updates = []
+        for match in matches:
+            supplier_price = match.get("supplier_price")
+            base_price = match.get("base_price")
+
+            # Проверяем что есть цена поставщика и она отличается от базовой
+            if supplier_price is not None and supplier_price > 0:
+                base_price = base_price if base_price is not None else 0
+
+                # Если цены отличаются или в базе нет цены (0)
+                if supplier_price != base_price:
+                    # Вычисляем процент изменения
+                    if base_price > 0:
+                        price_change_percent = abs(
+                            (supplier_price - base_price) / base_price * 100
+                        )
+                    else:
+                        price_change_percent = (
+                            100  # Новая цена вместо 0 - всегда обновляем!
+                        )
+
+                    # Проверяем что изменение больше минимального порога
+                    # Для товаров с base_price = 0 всегда обновляем
+                    if (
+                        price_change_percent >= MIN_PRICE_CHANGE_PERCENT
+                        or base_price == 0
+                    ):
+                        price_updates.append(match)
+                        if base_price == 0:
+                            self.log_info(
+                                f"📌 Добавлен {match.get('article')}: новая цена в базе (было 0 → {supplier_price})"
+                            )
+                    else:
+                        self.log_info(
+                            f"⏭️ Пропущен {match.get('article')}: изменение слишком мало ({price_change_percent:.1f}%)"
+                        )
+
+        self.update_progress(2, f"Найдено {len(price_updates)} товаров для обновления")
+
+        if not price_updates:
+            self.log_info("ℹ️ Нет изменений цен для обновления")
+            self.finish_progress("Все цены актуальны", auto_reset=True)
+            messagebox.showinfo(
+                "Информация", "Все цены уже актуальны, обновление не требуется"
+            )
+            return
+
+        self.log_info(f"📊 Найдено {len(price_updates)} товаров с изменениями цен")
+
+        # Показываем диалог подтверждения
+        backup_message = (
+            "Резервная копия будет создана.\n\n"
+            if backup_path
+            else "Резервная копия НЕ будет создана.\n\n"
+        )
+        result = messagebox.askyesno(
+            "Подтверждение обновления",
+            f"Будет обновлено {len(price_updates)} товаров.\n\n"
+            f"{backup_message}"
+            "Продолжить обновление цен?",
+            icon="question",
+        )
+
+        if result:
+            self.log_info("✅ Пользователь подтвердил обновление цен")
+
+            # Запускаем процесс обновления цен
+            try:
+                self.update_progress(3, "Создание резервной копии")
+                self.root.update()
+
+                # 1. Создаем резервную копию базы (если выбрана)
+                if backup_path:
+                    self.log_info("💾 Создание резервной копии базы...")
+                    try:
+                        import shutil
+
+                        # Определяем путь к оригинальному файлу базы
+                        base_file_path = "data/input"
+                        original_path = None
+
+                        if os.path.exists(base_file_path):
+                            base_files = []
+                            for file in os.listdir(base_file_path):
+                                if file.endswith(
+                                    (".xlsx", ".xls")
+                                ) and not file.startswith("~"):
+                                    full_path = os.path.join(base_file_path, file)
+                                    file_size = os.path.getsize(full_path)
+                                    base_files.append((full_path, file_size, file))
+
+                            if base_files:
+                                base_files.sort(key=lambda x: x[1], reverse=True)
+                                original_path = base_files[0][0]
+
+                        if original_path:
+                            # Создаем папку если не существует
+                            os.makedirs(os.path.dirname(backup_path), exist_ok=True)
+                            shutil.copy(original_path, backup_path)
+                            self.log_info(f"💾 Backup создан: {backup_path}")
+                        else:
+                            self.log_error("❌ Не найден файл базы для backup")
+
+                    except Exception as backup_error:
+                        self.log_error(f"❌ Ошибка создания backup: {backup_error}")
+                        messagebox.showerror(
+                            "Ошибка",
+                            f"Не удалось создать резервную копию: {backup_error}",
+                        )
+                        self.finish_progress("Ошибка создания backup", auto_reset=True)
+                        return
+                else:
+                    self.log_info(
+                        "ℹ️ Резервная копия не создается (выбрано пользователем)"
+                    )
+
+                # 2. Применяем обновления цен с проверками
+                self.update_progress(4, "Применение обновлений в памяти")
+                self.log_info("🔄 Применение обновлений цен...")
+                updates_applied = 0
+                updates_skipped = 0
+                warnings = []
+
+                # Определяем столбцы для обновления
+                if self.current_config == "vitya":
+                    base_price_col = "price_vitya_usd"
+                    article_col = "article_vitya"
+                elif self.current_config == "dimi":
+                    base_price_col = "price_dimi_usd"
+                    article_col = "article_dimi"
+                else:
+                    base_price_col = "price"
+                    article_col = "article"
+
+                # Проверяем что столбец существует в базе
+                if base_price_col not in self.base_df.columns:
+                    self.log_error(
+                        f"❌ Столбец {base_price_col} не найден в базе данных"
+                    )
+                    messagebox.showerror(
+                        "Ошибка", f"Столбец {base_price_col} не найден в базе данных"
+                    )
+                    self.set_status("Ошибка обновления", "error")
+                    return
+
+                # Обрабатываем каждое обновление
+                for update in price_updates:
+                    article = update.get("article")
+                    supplier_price = update.get("supplier_price", 0)
+                    base_price = update.get("base_price", 0)
+
+                    if not article or supplier_price <= 0:
+                        continue
+
+                    # Вычисляем процент изменения
+                    if base_price > 0:
+                        price_change_percent = abs(
+                            (supplier_price - base_price) / base_price * 100
+                        )
+                    else:
+                        price_change_percent = 100  # Новая цена вместо 0
+
+                    # Проверяем пороги безопасности
+                    if price_change_percent < MIN_PRICE_CHANGE_PERCENT:
+                        updates_skipped += 1
+                        self.log_info(
+                            f"⏭️ Пропущено {article}: изменение слишком мало ({price_change_percent:.1f}%)"
+                        )
+                        continue
+
+                    if price_change_percent > MAX_PRICE_CHANGE_PERCENT:
+                        warnings.append(
+                            {
+                                "article": article,
+                                "old_price": base_price,
+                                "new_price": supplier_price,
+                                "change_percent": price_change_percent,
+                                "reason": f"Большое изменение ({price_change_percent:.1f}%)",
+                            }
+                        )
+                        updates_skipped += 1
+                        self.log_info(
+                            f"⚠️ Пропущено {article}: изменение слишком большое ({price_change_percent:.1f}%)"
+                        )
+                        continue
+
+                    # Находим строку в базе для обновления
+                    try:
+                        if self.current_config == "vitya":
+                            # Для Вити ищем по int значению
+                            base_matches = self.base_df[
+                                self.base_df[article_col] == int(article)
+                            ]
+                        else:
+                            # Для остальных ищем по строке
+                            base_matches = self.base_df[
+                                self.base_df[article_col].astype(str).str.strip()
+                                == str(article).strip()
+                            ]
+
+                        if len(base_matches) > 0:
+                            # Обновляем цену в первой найденной строке
+                            base_idx = base_matches.index[0]
+                            old_price = self.base_df.loc[base_idx, base_price_col]
+                            self.base_df.loc[base_idx, base_price_col] = supplier_price
+                            updates_applied += 1
+
+                            self.log_info(
+                                f"💰 Обновлено {article}: {old_price} → {supplier_price} ({price_change_percent:+.1f}%)"
+                            )
+                        else:
+                            self.log_info(
+                                f"❓ Артикул {article} не найден в базе для обновления"
+                            )
+                            updates_skipped += 1
+
+                    except Exception as e:
+                        self.log_error(f"❌ Ошибка обновления {article}: {e}")
+                        updates_skipped += 1
+
+                # 3. Показываем результаты
+                self.update_progress(5, "Подготовка отчета результатов")
+                self.log_info("✅ Обновление цен завершено")
+                self.log_info(f"   💰 Цен обновлено: {updates_applied}")
+                self.log_info(f"   ⏭️ Пропущено: {updates_skipped}")
+                self.log_info(f"   ⚠️ Предупреждений: {len(warnings)}")
+
+                # 4. Показываем диалог результатов
+                result_message = f"Обновление цен завершено!\n\n"
+                result_message += f"✅ Обновлено цен: {updates_applied}\n"
+                result_message += f"⏭️ Пропущено: {updates_skipped}\n"
+                result_message += f"⚠️ Предупреждений: {len(warnings)}\n\n"
+                if backup_path:
+                    result_message += (
+                        f"💾 Резервная копия создана: {os.path.basename(backup_path)}\n"
+                    )
+                else:
+                    result_message += f"ℹ️ Резервная копия не создавалась\n"
+                result_message += f"🔄 База данных обновлена"
+
+                if warnings:
+                    result_message += (
+                        f"\n\n⚠️ Внимание: {len(warnings)} товаров требуют проверки"
+                    )
+
+                messagebox.showinfo("Обновление завершено", result_message)
+
+                # 5. СОХРАНЯЕМ ИЗМЕНЕНИЯ В EXCEL ФАЙЛ с сохранением форматирования
+                if updates_applied > 0:
+                    self.update_progress(6, "Сохранение в Excel файл")
+                    self.log_info("💾 Сохранение изменений в Excel файл...")
+
+                    # Определяем путь к оригинальному файлу базы
+                    base_file_path = "data/input"
+                    original_path = None
+
+                    # Ищем файл базы (самый большой .xlsx файл)
+                    if os.path.exists(base_file_path):
+                        base_files = []
+                        for file in os.listdir(base_file_path):
+                            if file.endswith((".xlsx", ".xls")) and not file.startswith(
+                                "~"
+                            ):
+                                full_path = os.path.join(base_file_path, file)
+                                file_size = os.path.getsize(full_path)
+                                base_files.append((full_path, file_size, file))
+
+                        if base_files:
+                            # Берем самый большой файл (это должна быть база)
+                            base_files.sort(key=lambda x: x[1], reverse=True)
+                            original_path = base_files[0][0]
+
+                    if original_path:
+                        # Создаем отдельный backup для Excel функции (всегда)
+                        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+                        excel_backup_filename = (
+                            f"EXCEL_backup_{self.current_config}_{timestamp}.xlsx"
+                        )
+                        excel_backup_path = os.path.join(
+                            "data/output", excel_backup_filename
+                        )
+
+                        # Применяем точечное обновление Excel (всегда!)
+                        success = self.update_excel_prices_preserve_formatting(
+                            original_path,
+                            excel_backup_path,
+                            price_updates,
+                            self.current_config,
+                        )
+
+                        if success:
+                            self.log_info(
+                                "✅ Excel файл успешно обновлен с сохранением форматирования"
+                            )
+                        else:
+                            self.log_error("❌ Ошибка обновления Excel файла")
+                    else:
+                        self.log_error("❌ Не найден файл базы для обновления")
+
+                # 6. Завершаем операцию
+                self.update_progress(7, "Завершение операции")
+                self.finish_progress("Цены успешно обновлены!", auto_reset=True)
+                self.update_buttons_state()
+
+            except Exception as e:
+                self.log_error(f"❌ Ошибка при обновлении цен: {e}")
+                self.finish_progress("Ошибка обновления цен", auto_reset=True)
+                messagebox.showerror("Ошибка", f"Ошибка при обновлении цен: {e}")
+        else:
+            self.log_info("❌ Пользователь отменил обновление цен")
+            self.finish_progress("Обновление отменено", auto_reset=True)
+
+    def refresh_interface(self):
+        """Обновление интерфейса"""
+        self.log_info("🔄 Обновление интерфейса...")
+
+        # Обновляем список доступных конфигураций
+        self.load_available_configs()
+
+        # Обновляем статус
+        self.set_status("Интерфейс обновлён", "success")
+        self.root.update()
+
+        self.log_info("✅ Интерфейс обновлён")
+
+    def show_help(self):
+        """Показать справку по использованию"""
+        help_text = """🚀 MiStockSync - Справка
+
+📁 Загрузка файлов:
+• Файлы Вити должны содержать 'JHT' в названии
+• Файлы Димы должны содержать 'DiMi' в названии  
+• База данных должна содержать 'BASE' в названии
+
+🔍 Процесс работы:
+1. Выберите файл поставщика (или поставьте галочку 'авто')
+2. Нажмите 'Сравнить с базой' для анализа
+3. Используйте 'Сохранить отчет' для Excel отчёта
+4. 'Обновить цены' для применения изменений
+
+⚙️ Фильтрация:
+• Витя: только товары "Имеются в нал."
+• Дима: исключает товары "Ожидается"
+• Цены: исключает NaN, пустые и нулевые
+
+📊 Папки:
+• data/input - исходные файлы
+• data/output - результаты работы
+• logs/ - файлы логов"""
+
+        messagebox.showinfo("Справка", help_text)
+        self.log_info("❓ Показана справка пользователю")
+
+    def create_advanced_status_bar(self, main_frame):
+        """Создание продвинутого многосекционного статус-бара"""
+        # Основной фрейм статус-бара
+        self.status_frame = ttk.Frame(main_frame, relief=tk.SUNKEN, borderwidth=1)
+        self.status_frame.grid(
+            row=5, column=0, columnspan=3, sticky=(tk.W, tk.E), pady=(5, 0)
+        )
+        self.status_frame.columnconfigure(0, weight=1)
+
+        # Внутренний фрейм для компонентов
+        inner_frame = ttk.Frame(self.status_frame)
+        inner_frame.grid(row=0, column=0, sticky=(tk.W, tk.E), padx=5, pady=2)
+        inner_frame.columnconfigure(0, weight=1)
+
+        # Левая часть - основной статус с иконкой
+        self.status_main = tk.StringVar(value="🚀 Готов к работе")
+        self.status_label = ttk.Label(
+            inner_frame, textvariable=self.status_main, anchor=tk.W
+        )
+        self.status_label.grid(row=0, column=0, sticky=(tk.W, tk.E), padx=(0, 10))
+
+        # Центр - прогресс-бар (скрыт по умолчанию)
+        self.progress_var = tk.DoubleVar()
+        self.progress_bar = ttk.Progressbar(
+            inner_frame, variable=self.progress_var, length=200, mode="determinate"
+        )
+        self.progress_bar.grid(row=0, column=1, padx=(10, 10))
+        self.progress_bar.grid_remove()  # Изначально скрыт
+
+        # Правая часть - дополнительная информация
+        self.status_info = tk.StringVar(value="")
+        self.info_label = ttk.Label(
+            inner_frame, textvariable=self.status_info, anchor=tk.E
+        )
+        self.info_label.grid(row=0, column=2, padx=(10, 0))
+
+        # Инициализация переменных для прогресса ⓘ
+        self.is_progress_visible = False
+        self.current_operation = None
+
+    def set_status(self, message, status_type="info", show_time=True):
+        """Установка красивого статуса с иконками и цветами"""
+        icons = {
+            "loading": "⏳",
+            "success": "✅",
+            "error": "❌",
+            "warning": "⚠️",
+            "info": "🚀",
+            "file": "📁",
+            "save": "💾",
+            "compare": "🔍",
+            "update": "🏷️",
+            "report": "📊",
+            "backup": "🛡️",
+        }
+
+        # Цвета для разных типов статусов
+        colors = {
+            "loading": "#9932CC",  # Orange
+            "success": "#228B22",  # ForestGreen
+            "error": "#DC143C",  # Crimson
+            "warning": "#FFD700",  # Gold
+            "info": "#4169E1",  # RoyalBlue
+            "file": "#9932CC",  # DarkOrchid
+            "save": "#9932CC",  # LimeGreen #32CD32
+            "compare": "#9932CC",  # DodgerBlue #1E90FF
+            "update": "#9932CC",  # BlueViolet
+            "report": "#20B2AA",  # LightSeaGreen
+            "backup": "#CD853F",  # Peru
+        }
+
+        icon = icons.get(status_type, "🚀")
+        color = colors.get(status_type, "#000000")
+
+        formatted_message = f"{icon} {message}"
+        self.status_main.set(formatted_message)
+        self.status_label.config(foreground=color)
+
+        # Добавляем время если нужно
+        if show_time:
+            current_time = datetime.now().strftime("%H:%M:%S")
+            self.status_info.set(f"🕐 {current_time}")
+
+        # Принудительное обновление GUI
+        self.root.update_idletasks()
+
+    def start_progress(self, message, total_steps, operation_type="loading"):
+        """Запуск прогресс-бара для длительной операции"""
+        self.current_operation = {
+            "message": message,
+            "total": total_steps,
+            "current": 0,
+            "type": operation_type,
+        }
+
+        # Настраиваем прогресс-бар
+        self.progress_var.set(0)
+        self.progress_bar.config(maximum=total_steps)
+
+        # Показываем прогресс-бар
+        self.progress_bar.grid()
+        self.is_progress_visible = True
+
+        # Устанавливаем статус
+        self.set_status(f"{message} (0/{total_steps})", operation_type, show_time=True)
+
+        self.root.update_idletasks()
+
+    def update_progress(self, step, message=None):
+        """Обновление прогресс-бара"""
+        if not self.is_progress_visible or not self.current_operation:
+            return
+
+        self.current_operation["current"] = step
+        self.progress_var.set(step)
+
+        # Обновляем сообщение
+        if message:
+            display_message = message
+        else:
+            display_message = self.current_operation["message"]
+
+        total = self.current_operation["total"]
+        operation_type = self.current_operation["type"]
+
+        # Вычисляем процент
+        percent = int((step / total) * 100) if total > 0 else 0
+
+        self.set_status(
+            f"{display_message} ({step}/{total}) - {percent}%",
+            operation_type,
+            show_time=True,
+        )
+
+        self.root.update_idletasks()
+
+    def finish_progress(self, success_message="Операция завершена", auto_reset=True):
+        """Завершение прогресс-бара"""
+        if not self.is_progress_visible:
+            return
+
+        # Скрываем прогресс-бар
+        self.progress_bar.grid_remove()
+        self.is_progress_visible = False
+
+        # Показываем финальное сообщение
+        self.set_status(success_message, "success", show_time=True)
+
+        # Автосброс через 3 секунды
+        if auto_reset:
+            self.root.after(3000, lambda: self.set_status("Готов к работе", "info"))
+
+        self.current_operation = None
+        self.root.update_idletasks()
+
+    def set_temp_status(self, message, status_type="info", duration=2000):
+        """Временный статус с автосбросом"""
+        old_status = self.status_main.get()
+        old_color = self.status_label.cget("foreground")
+
+        self.set_status(message, status_type)
+
+        # Автоматический сброс
+        def reset_status():
+            self.status_main.set(old_status)
+            self.status_label.config(foreground=old_color)
+
+        self.root.after(duration, reset_status)
 
     def add_to_base(self):
         """Добавление товаров в базу данных (заглушка)"""
@@ -1339,6 +2437,491 @@ class MiStockSyncApp:
             "• Резервное копирование",
         )
 
+    def show_settings(self):
+        """Показать окно настроек с автозагрузкой базы"""
+        self.log_info("⚙️ Открытие окна настроек...")
+
+        # Создаем окно настроек
+        settings_window = tk.Toplevel(self.root)
+        settings_window.title("Настройки MiStockSync")
+        settings_window.resizable(False, False)
+
+        # Устанавливаем иконку для окна
+        self.set_window_icon(settings_window)
+
+        # Центрируем окно относительно главного окна
+        window_width = 450
+        window_height = 420  # Увеличено с 350 из-за добавления настроек шрифта
+        self.center_window(settings_window, window_width, window_height)
+
+        # Делаем окно модальным
+        settings_window.transient(self.root)
+        settings_window.grab_set()
+
+        # Заголовок
+        ttk.Label(
+            settings_window, text="⚙️ Настройки приложения", font=("Arial", 14, "bold")
+        ).pack(pady=10)
+
+        # Рамка с настройками
+        settings_frame = ttk.LabelFrame(
+            settings_window, text="Основные настройки", padding="10"
+        )
+        settings_frame.pack(fill="both", expand=True, padx=10, pady=10)
+
+        # Настройка автозагрузки базы
+        auto_load_frame = ttk.Frame(settings_frame)
+        auto_load_frame.pack(fill="x", pady=10)
+
+        ttk.Label(
+            auto_load_frame,
+            text="📊 Автозагрузка базы данных:",
+            font=("Arial", 10, "bold"),
+        ).pack(anchor="w")
+
+        auto_load_var = tk.BooleanVar(value=self.auto_load_base_enabled)
+        auto_load_check = ttk.Checkbutton(
+            auto_load_frame,
+            text="Автоматически загружать базу при сравнении",
+            variable=auto_load_var,
+        )
+        auto_load_check.pack(anchor="w", padx=20, pady=5)
+
+        ttk.Label(
+            auto_load_frame,
+            text="При включении база будет загружаться автоматически\nпри первом сравнении с поставщиком.",
+            font=("Arial", 8),
+            foreground="gray",
+        ).pack(anchor="w", padx=20)
+
+        # Разделитель
+        ttk.Separator(settings_frame, orient="horizontal").pack(fill="x", pady=15)
+
+        # Настройка размера шрифта
+        font_frame = ttk.Frame(settings_frame)
+        font_frame.pack(fill="x", pady=10)
+
+        ttk.Label(
+            font_frame,
+            text="🔤 Размер шрифта по умолчанию:",
+            font=("Arial", 10, "bold"),
+        ).pack(anchor="w")
+
+        font_size_var = tk.StringVar(value=self.current_font_size)
+
+        font_options = [
+            ("📝 Обычный", "normal"),
+            ("📄 Средний", "medium"),
+            ("📊 Крупный", "large"),
+        ]
+
+        for text, value in font_options:
+            ttk.Radiobutton(
+                font_frame, text=text, variable=font_size_var, value=value
+            ).pack(anchor="w", padx=20, pady=2)
+
+        ttk.Label(
+            font_frame,
+            text="Изменения применятся к главному окну информации.",
+            font=("Arial", 8),
+            foreground="gray",
+        ).pack(anchor="w", padx=20, pady=(5, 0))
+
+        # Разделитель
+        ttk.Separator(settings_frame, orient="horizontal").pack(fill="x", pady=15)
+
+        # Функции в разработке
+        ttk.Label(
+            settings_frame, text="🚧 В разработке:", font=("Arial", 10, "bold")
+        ).pack(anchor="w")
+
+        planned_features = [
+            "• Настройка путей к файлам по умолчанию",
+            "• Пороги для фильтрации цен",
+            "• Параметры автосохранения",
+            "• Настройки логирования",
+            "• Цветовые схемы интерфейса",
+        ]
+
+        for feature in planned_features:
+            ttk.Label(settings_frame, text=feature, font=("Arial", 9)).pack(
+                anchor="w", padx=10
+            )
+
+        # Кнопки
+        button_frame = ttk.Frame(settings_window)
+        button_frame.pack(pady=10)
+
+        def save_settings():
+            """Сохранить настройки"""
+            # Сохраняем автозагрузку базы
+            self.auto_load_base_enabled = auto_load_var.get()
+            self.settings["auto_load_base"] = auto_load_var.get()
+
+            # Сохраняем размер шрифта
+            new_font_size = font_size_var.get()
+            if new_font_size != self.current_font_size:
+                self.current_font_size = new_font_size
+                self.settings["font_size"] = new_font_size
+                # Применяем новый размер шрифта сразу
+                self.apply_font_size(new_font_size)
+
+            # Сохраняем настройки в файл
+            if self.save_settings(self.settings):
+                self.log_info(
+                    f"💾 Настройки сохранены: автозагрузка={auto_load_var.get()}, шрифт={new_font_size}"
+                )
+                messagebox.showinfo("Настройки", "Настройки успешно сохранены!")
+            else:
+                messagebox.showerror("Ошибка", "Не удалось сохранить настройки")
+
+            settings_window.destroy()
+
+        def cancel_settings():
+            """Отменить изменения"""
+            self.log_info("↩️ Изменения настроек отменены")
+            settings_window.destroy()
+
+        ttk.Button(button_frame, text="💾 Сохранить", command=save_settings).pack(
+            side="left", padx=5
+        )
+        ttk.Button(button_frame, text="❌ Отмена", command=cancel_settings).pack(
+            side="left", padx=5
+        )
+
+    def quit_application(self):
+        """Выход из приложения с подтверждением"""
+        self.log_info("🚪 Запрос на выход из приложения...")
+
+        result = messagebox.askyesno(
+            "Подтверждение выхода",
+            "Вы действительно хотите выйти из MiStockSync?\n\n"
+            "Все несохраненные данные будут потеряны.",
+            icon="question",
+        )
+
+        if result:
+            self.log_info("👋 Завершение работы приложения...")
+            self.logger.info("📋 Приложение закрыто пользователем")
+            self.root.quit()
+        else:
+            self.log_info("↩️ Выход отменен пользователем")
+
+    def show_about(self):
+        """Показать информацию о программе"""
+        self.log_info("ℹ️ Показ информации о программе...")
+
+        # Создаем отдельное окно вместо простого messagebox
+        about_window = tk.Toplevel(self.root)
+        about_window.title("О программе")
+        about_window.resizable(False, False)
+
+        # Устанавливаем иконку для окна
+        self.set_window_icon(about_window)
+
+        # Центрируем окно относительно главного окна
+        window_width = 320  # Увеличено с 300 из-за длинного текста
+        window_height = 350  # Увеличено с 240 из-за дополнительного текста
+        self.center_window(about_window, window_width, window_height)
+
+        # Делаем окно модальным
+        about_window.transient(self.root)
+        about_window.grab_set()
+
+        # Главный фрейм
+        main_frame = ttk.Frame(about_window, padding="20")
+        main_frame.pack(fill="both", expand=True)
+
+        # Большая иконка приложения (эмодзи)
+        ttk.Label(main_frame, text="🚀", font=("Arial", 48)).pack()
+
+        # Название и версия
+        ttk.Label(
+            main_frame, text="MiStockSync v0.0.9", font=("Arial", 14, "bold")
+        ).pack(pady=5)
+
+        # Дата
+        ttk.Label(
+            main_frame,
+            text=f"📅 {datetime.now().strftime('%Y-%m-%d')}",
+            font=("Arial", 9),
+        ).pack()
+
+        # Краткое описание
+        ttk.Label(
+            main_frame,
+            text="Синхронизация прайс-листов\nс базой данных товаров\n\n• Автозагрузка базы данных\n• Настройка размера шрифта\n• Сохранение пользовательских настроек",
+            font=("Arial", 9),
+            justify="center",
+        ).pack(pady=10)
+
+        # Кнопка закрытия
+        ttk.Button(
+            main_frame, text="✅ ОК", command=about_window.destroy, width=10
+        ).pack(pady=10)
+
+        self.log_info("ℹ️ Информация о программе показана")
+
+    # === ФУНКЦИИ МЕНЮ "ПРАВКА" ===
+    def cut_text(self):
+        """Вырезать выделенный текст"""
+        try:
+            focused_widget = self.root.focus_get()
+            if hasattr(focused_widget, "selection_get"):
+                text = focused_widget.selection_get()
+                self.root.clipboard_clear()
+                self.root.clipboard_append(text)
+                focused_widget.delete("sel.first", "sel.last")
+                self.log_info("✂️ Текст вырезан в буфер обмена")
+        except tk.TclError:
+            self.log_info("⚠️ Нет выделенного текста для вырезания")
+
+    def copy_text(self):
+        """Копировать выделенный текст"""
+        try:
+            focused_widget = self.root.focus_get()
+            if hasattr(focused_widget, "selection_get"):
+                text = focused_widget.selection_get()
+                self.root.clipboard_clear()
+                self.root.clipboard_append(text)
+                self.log_info("📋 Текст скопирован в буфер обмена")
+        except tk.TclError:
+            self.log_info("⚠️ Нет выделенного текста для копирования")
+
+    def select_all_text(self):
+        """Выделить весь текст в активном поле"""
+        try:
+            focused_widget = self.root.focus_get()
+            if focused_widget == self.info_text:
+                # Для ScrolledText
+                focused_widget.tag_add("sel", "1.0", "end")
+                self.log_info("🔘 Весь текст выделен")
+            elif hasattr(focused_widget, "select_range"):
+                # Для Entry
+                focused_widget.select_range(0, tk.END)
+                self.log_info("🔘 Весь текст выделен")
+        except:
+            self.log_info("⚠️ Нет активного текстового поля")
+
+    def invert_selection(self):
+        """Инвертировать выделение (заглушка)"""
+        self.log_info("🔄 Инвертирование выделения")
+        messagebox.showinfo(
+            "Функция в разработке",
+            "Инвертирование выделения будет добавлено в следующих версиях",
+        )
+
+    # === ФУНКЦИИ РАЗМЕРА ШРИФТА ===
+    def change_font_size(self, size_type):
+        """Изменить размер шрифта в интерфейсе"""
+        if size_type in ["normal", "medium", "large"]:
+            # Применяем новый размер шрифта
+            self.apply_font_size(size_type)
+
+            # Сохраняем в настройки
+            self.current_font_size = size_type
+            self.settings["font_size"] = size_type
+            self.save_settings(self.settings)
+
+            size_names = {"normal": "обычный", "medium": "средний", "large": "крупный"}
+
+            self.log_info(f"🔤 Установлен {size_names[size_type]} размер шрифта")
+        else:
+            self.log_info("⚠️ Неизвестный размер шрифта")
+
+    def apply_font_size(self, size_type):
+        """Применение размера шрифта к текстовому полю"""
+        sizes = {
+            "normal": ("Arial", 9),
+            "medium": ("Arial", 11),
+            "large": ("Arial", 13),
+        }
+
+        if size_type in sizes and hasattr(self, "info_text"):
+            font_family, font_size = sizes[size_type]
+            self.info_text.configure(font=(font_family, font_size))
+
+    def center_window(self, window, width, height, parent=None):
+        """Центрирование окна относительно родительского окна или экрана"""
+        if parent is None:
+            parent = self.root
+
+        # Получаем размеры и позицию родительского окна
+        parent.update_idletasks()
+        parent_x = parent.winfo_x()
+        parent_y = parent.winfo_y()
+        parent_width = parent.winfo_width()
+        parent_height = parent.winfo_height()
+
+        # Вычисляем позицию для центрирования относительно родительского окна
+        x = parent_x + (parent_width - width) // 2
+        y = parent_y + (parent_height - height) // 2
+
+        # Устанавливаем размер и позицию
+        window.geometry(f"{width}x{height}+{x}+{y}")
+
+    def set_window_icon(self, window):
+        """Установка иконки для дочернего окна"""
+        try:
+            from PIL import Image, ImageTk
+
+            icon = ImageTk.PhotoImage(Image.open("assets/icon.png"))
+            window.iconphoto(False, icon)
+        except Exception:
+            # Если не удалось загрузить иконку, пропускаем
+            pass
+
+    def create_backup_base(self):
+        """Создание резервной копии базы перед обновлением цен"""
+
+        if self.base_df is None:
+            self.log_error("❌ База данных не загружена для создания backup")
+            return False
+
+        try:
+            # Создаем папку для backup если не существует
+            backup_dir = "data/output"
+            os.makedirs(backup_dir, exist_ok=True)
+
+            # Создаем имя файла backup
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            backup_filename = f"BACKUP_base_{self.current_config}_{timestamp}.xlsx"
+            backup_path = os.path.join(backup_dir, backup_filename)
+
+            # Сохраняем backup
+            self.base_df.to_excel(backup_path, index=False)
+
+            self.log_info(f"💾 Резервная копия создана: {backup_filename}")
+            self.log_info(f"📁 Путь: {backup_path}")
+
+            return True
+
+        except Exception as e:
+            self.log_error(f"❌ Ошибка создания резервной копии: {e}")
+            return False
+
+    def update_excel_prices_preserve_formatting(
+        self, original_path, backup_path, price_updates, supplier_config
+    ):
+        """
+        Точечное обновление цен в Excel файле с сохранением всего форматирования
+        Изменяются ТОЛЬКО значения ценовых ячеек, всё остальное остается как было
+        """
+
+        self.log_info("🔧 Точечное обновление цен с сохранением форматирования...")
+
+        try:
+            # Проверяем наличие openpyxl
+            if not OPENPYXL_AVAILABLE:
+                self.log_error(
+                    "❌ Библиотека openpyxl не установлена. Используйте: pip install openpyxl"
+                )
+                return False
+
+            # 1. Создаем backup
+            os.makedirs("data/output", exist_ok=True)
+            shutil.copy(original_path, backup_path)
+            self.log_info(f"💾 Backup создан: {os.path.basename(backup_path)}")
+
+            # 2. Открываем Excel файл через openpyxl (сохраняет форматирование)
+            workbook = load_workbook(original_path)
+            worksheet = workbook.active  # Берем первый лист
+
+            # 3. Определяем столбец для обновления цен (реальные названия в базе)
+            if supplier_config == "vitya":
+                price_column_name = "Цена Витя в $"
+                article_column_name = "Артикул Витя"
+            elif supplier_config == "dimi":
+                price_column_name = "Цена Дима в $"
+                article_column_name = "Артикул Дима"
+            else:
+                self.log_error(f"❌ Неподдерживаемая конфигурация: {supplier_config}")
+                return False
+
+            # 4. Находим индексы столбцов в Excel файле
+            header_row = 1  # Предполагаем что заголовки в первой строке
+            price_col_idx = None
+            article_col_idx = None
+
+            for col_idx in range(1, worksheet.max_column + 1):
+                cell_value = worksheet.cell(row=header_row, column=col_idx).value
+                if cell_value == price_column_name:
+                    price_col_idx = col_idx
+                elif cell_value == article_column_name:
+                    article_col_idx = col_idx
+
+            if not price_col_idx or not article_col_idx:
+                self.log_error(
+                    f"❌ Не найдены столбцы в Excel: {price_column_name}, {article_column_name}"
+                )
+                return False
+
+            self.log_info(
+                f"📍 Найдены столбцы: {article_column_name} (col {article_col_idx}), {price_column_name} (col {price_col_idx})"
+            )
+
+            # 5. Применяем только изменения цен
+            updates_applied = 0
+
+            for update in price_updates:
+                article_to_find = str(update.get("article", "")).strip()
+                new_price = update.get("supplier_price", 0)
+
+                if not article_to_find or new_price <= 0:
+                    continue
+
+                # Ищем строку с нужным артикулом
+                for row_idx in range(2, worksheet.max_row + 1):  # Начинаем с 2-й строки
+                    cell_value = worksheet.cell(
+                        row=row_idx, column=article_col_idx
+                    ).value
+
+                    if cell_value is not None:
+                        if supplier_config == "vitya":
+                            # Для Вити сравниваем как int
+                            try:
+                                if isinstance(cell_value, (int, float)) and int(
+                                    cell_value
+                                ) == int(float(article_to_find)):
+                                    found_match = True
+                                else:
+                                    found_match = False
+                            except (ValueError, TypeError):
+                                found_match = False
+                        else:
+                            # Для Димы сравниваем как строки
+                            found_match = str(cell_value).strip() == article_to_find
+
+                        if found_match:
+                            # ОБНОВЛЯЕМ ТОЛЬКО ЗНАЧЕНИЕ ЯЧЕЙКИ (форматирование сохраняется!)
+                            old_value = worksheet.cell(
+                                row=row_idx, column=price_col_idx
+                            ).value
+                            worksheet.cell(
+                                row=row_idx, column=price_col_idx, value=new_price
+                            )
+                            updates_applied += 1
+
+                            self.log_info(
+                                f"   ✅ {article_to_find}: {old_value} → {new_price}"
+                            )
+                            break
+
+            # 6. Сохраняем файл (форматирование полностью сохраняется)
+            workbook.save(original_path)
+            workbook.close()
+
+            self.log_info(f"✅ Применено {updates_applied} обновлений цен")
+            self.log_info(
+                f"🎨 Сохранено ВСЁ форматирование: размеры ячеек, цвета, картинки и т.д."
+            )
+
+            return True
+
+        except Exception as e:
+            self.log_error(f"❌ Ошибка обновления Excel файла: {e}")
+            return False
+
 
 def main():
     """Главная функция приложения"""
@@ -1347,6 +2930,20 @@ def main():
     print("📋 Инициализация интерфейса...")
 
     root = tk.Tk()
+
+    # Настройка иконки приложения
+    try:
+        from PIL import Image, ImageTk
+
+        icon = ImageTk.PhotoImage(Image.open("assets/icon.png"))
+        root.iconphoto(False, icon)
+        print("✅ Иконка приложения загружена")
+    except Exception as e:
+        print(f"⚠️ Не удалось загрузить иконку: {e}")
+
+    # Устанавливаем заголовок
+    root.title("🚀 MiStockSync - Управление прайсами")
+
     app = MiStockSyncApp(root)
 
     # Центрируем окно
