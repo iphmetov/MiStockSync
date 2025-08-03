@@ -1,7 +1,15 @@
 # Зависимости для MiStockSync GUI приложения
 
 # Основные библиотеки
-pandas>=2.1.0          # Работа с данными (DataFrame, обработка Excel)
-openpyxl>=3.1.2        # Чтение и запись Excel файлов (.xlsx)
+
+et-xmlfile==2.0.0
+numpy==2.3.1
+openpyxl>=3.0.0
+pandas>=1.5.0
+python-dateutil==2.9.0.post0
+pytz==2025.2
+six==1.17.0
+tzdata==2025.2
+Pillow>=9.0.0
 
 # Примечание: tkinter встроен в Python, установки не требует

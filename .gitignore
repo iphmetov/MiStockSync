@@ -206,3 +206,6 @@ logs/*.log
 # Temporary files
 *.tmp
 *~
+
+# User settings - not included in repository
+settings.json
