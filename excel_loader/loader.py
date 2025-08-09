@@ -25,24 +25,41 @@ class ExcelLoaderEnhanced:
         Args:
             config_name: Имя конфигурации (без .json)
         """
+        if not config_name or not isinstance(config_name, str):
+            config_name = "default"
+
         self.config_name = config_name
         self.config = self._load_config(config_name)
         self._setup_logging()
 
     def get_available_configs(self) -> List[str]:
         """Получение списка доступных конфигураций"""
-        configs_dir = os.path.join(os.path.dirname(__file__), "configs")
-        if not os.path.exists(configs_dir):
-            return ["default"]
+        try:
+            configs_dir = os.path.join(os.path.dirname(__file__), "configs")
+            if not os.path.exists(configs_dir):
+                return ["default"]
 
-        config_files = glob.glob(os.path.join(configs_dir, "*_config.json"))
-        config_names = [
-            os.path.basename(f).replace("_config.json", "") for f in config_files
-        ]
-        return sorted(config_names)
+            config_files = glob.glob(os.path.join(configs_dir, "*_config.json"))
+            config_names = []
+            for f in config_files:
+                try:
+                    config_name = os.path.basename(f).replace("_config.json", "")
+                    if config_name:
+                        config_names.append(config_name)
+                except Exception as e:
+                    self.logger.warning(f"Ошибка при обработке конфига {f}: {e}")
+                    continue
+
+            return sorted(config_names) if config_names else ["default"]
+        except Exception as e:
+            self.logger.error(f"Ошибка при получении списка конфигов: {e}")
+            return ["default"]
 
     def _load_config(self, config_name: str = "default") -> dict:
         """Загрузка конфигурации по имени"""
+        if not config_name or not isinstance(config_name, str):
+            config_name = "default"
+
         configs_dir = os.path.join(os.path.dirname(__file__), "configs")
         config_path = os.path.join(configs_dir, f"{config_name}_config.json")
 
@@ -76,32 +93,47 @@ class ExcelLoaderEnhanced:
 
     def _setup_logging(self):
         """Настройка логирования"""
-        log_dir = Path("logs")
-        log_dir.mkdir(exist_ok=True)
+        try:
+            log_dir = Path("logs")
+            log_dir.mkdir(exist_ok=True)
 
-        log_file = log_dir / f"excel_loader_{datetime.now().strftime('%Y%m%d')}.log"
+            log_file = log_dir / f"excel_loader_{datetime.now().strftime('%Y%m%d')}.log"
 
-        self.logger = logging.getLogger(f"excel_loader_{self.config_name}")
-        self.logger.setLevel(logging.INFO)
+            self.logger = logging.getLogger(f"excel_loader_{self.config_name}")
+            self.logger.setLevel(logging.INFO)
 
-        if not self.logger.handlers:
-            file_handler = logging.FileHandler(log_file, encoding="utf-8")
-            file_handler.setLevel(logging.INFO)
+            if not self.logger.handlers:
+                file_handler = logging.FileHandler(log_file, encoding="utf-8")
+                file_handler.setLevel(logging.INFO)
 
-            console_handler = logging.StreamHandler()
-            console_handler.setLevel(logging.INFO)
+                console_handler = logging.StreamHandler()
+                console_handler.setLevel(logging.INFO)
 
-            formatter = logging.Formatter(
-                "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
-            )
-            file_handler.setFormatter(formatter)
-            console_handler.setFormatter(formatter)
+                formatter = logging.Formatter(
+                    "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+                )
+                file_handler.setFormatter(formatter)
+                console_handler.setFormatter(formatter)
 
-            self.logger.addHandler(file_handler)
-            self.logger.addHandler(console_handler)
+                self.logger.addHandler(file_handler)
+                self.logger.addHandler(console_handler)
+        except Exception as e:
+            # Если логирование не настроилось, создаем простой логгер
+            self.logger = logging.getLogger(f"excel_loader_{self.config_name}")
+            self.logger.setLevel(logging.WARNING)
+            if not self.logger.handlers:
+                console_handler = logging.StreamHandler()
+                console_handler.setLevel(logging.WARNING)
+                formatter = logging.Formatter("%(levelname)s - %(message)s")
+                console_handler.setFormatter(formatter)
+                self.logger.addHandler(console_handler)
 
     def _get_file_info(self, file_path: str) -> dict:
         """Получение информации о файле"""
+        if not file_path or not isinstance(file_path, str):
+            self.logger.error("Некорректный путь к файлу")
+            return {}
+
         try:
             stat = os.stat(file_path)
             return {
@@ -121,16 +153,29 @@ class ExcelLoaderEnhanced:
 
     def _apply_column_mapping(self, df: pd.DataFrame) -> pd.DataFrame:
         """Применение маппинга столбцов из конфига"""
+        # Проверяем, что DataFrame не пустой
+        if df is None or df.empty:
+            return df
+
         if not self.config.get("column_mapping"):
             return df
 
+        # Создаем список названий столбцов в DataFrame в виде строк
+        df_column_names = []
+        for col in df.columns:
+            col_str = str(col) if col is not None else ""
+            df_column_names.append(col_str)
+
         mapping = {}
         for old_col in df.columns:
-            if not isinstance(old_col, str):
-                old_col = str(old_col)
+            # Безопасное преобразование в строку
+            old_col_str = str(old_col) if old_col is not None else ""
 
             for config_key, config_value in self.config["column_mapping"].items():
-                if old_col.lower().strip() == config_key.lower().strip():
+                # Безопасное преобразование ключа конфигурации в строку
+                config_key_str = str(config_key) if config_key is not None else ""
+
+                if old_col_str.lower().strip() == config_key_str.lower().strip():
                     mapping[old_col] = config_value
                     break
 
@@ -142,15 +187,30 @@ class ExcelLoaderEnhanced:
 
     def _remove_ignored_columns(self, df: pd.DataFrame) -> pd.DataFrame:
         """Удаление игнорируемых столбцов"""
+        # Проверяем, что DataFrame не пустой
+        if df is None or df.empty:
+            return df
+
         ignore_columns = self.config.get("ignore_columns", [])
         if not ignore_columns:
             return df
 
-        columns_to_drop = []
+        # Создаем список названий столбцов в DataFrame в виде строк
+        df_column_names = []
         for col in df.columns:
             col_str = str(col) if col is not None else ""
+            df_column_names.append(col_str)
+
+        columns_to_drop = []
+        for col in df.columns:
+            # Безопасное преобразование в строку
+            col_str = str(col) if col is not None else ""
+
             for ignore_pattern in ignore_columns:
-                if ignore_pattern.lower() in col_str.lower():
+                # Безопасное преобразование паттерна в строку
+                ignore_str = str(ignore_pattern) if ignore_pattern is not None else ""
+
+                if ignore_str.lower() in col_str.lower():
                     columns_to_drop.append(col)
                     break
 
@@ -162,15 +222,23 @@ class ExcelLoaderEnhanced:
 
     def _fix_unnamed_columns(self, df: pd.DataFrame) -> pd.DataFrame:
         """Исправление Unnamed столбцов"""
+        if df is None or df.empty or len(df.columns) == 0:
+            return df
+
         new_columns = []
         for col in df.columns:
+            # Безопасное преобразование в строку
             col_str = str(col) if col is not None else "Column"
 
             if "Unnamed" in col_str:
-                first_val = df[col].iloc[0] if len(df) > 0 else None
-                if pd.notna(first_val) and str(first_val).strip():
-                    new_columns.append(str(first_val).strip())
-                else:
+                try:
+                    first_val = df[col].iloc[0] if len(df) > 0 else None
+                    if pd.notna(first_val) and str(first_val).strip():
+                        new_columns.append(str(first_val).strip())
+                    else:
+                        new_columns.append(f"Column_{len(new_columns) + 1}")
+                except Exception as e:
+                    self.logger.warning(f"Ошибка при обработке столбца {col_str}: {e}")
                     new_columns.append(f"Column_{len(new_columns) + 1}")
             else:
                 new_columns.append(col_str)
@@ -180,37 +248,69 @@ class ExcelLoaderEnhanced:
 
     def _apply_data_types(self, df: pd.DataFrame) -> pd.DataFrame:
         """Применение типов данных из конфига"""
+        # Проверяем, что DataFrame не пустой
+        if df is None or df.empty:
+            return df
+
         data_types = self.config.get("data_types", {})
         if not data_types:
             return df
 
+        # Создаем список названий столбцов в DataFrame в виде строк
+        df_column_names = []
+        for col in df.columns:
+            col_str = str(col) if col is not None else ""
+            df_column_names.append(col_str)
+
         for column, dtype in data_types.items():
-            if column in df.columns:
+            # Безопасное преобразование названия столбца в строку
+            column_str = str(column) if column is not None else ""
+
+            if column_str in df_column_names:
                 try:
                     if dtype == "float":
-                        df[column] = pd.to_numeric(df[column], errors="coerce")
+                        df[column_str] = pd.to_numeric(df[column_str], errors="coerce")
                     elif dtype == "int":
-                        df[column] = pd.to_numeric(df[column], errors="coerce").astype(
-                            "Int64"
-                        )
+                        df[column_str] = pd.to_numeric(
+                            df[column_str], errors="coerce"
+                        ).astype("Int64")
                     elif dtype == "string":
-                        df[column] = df[column].astype(str)
+                        df[column_str] = df[column_str].astype(str)
 
-                    self.logger.info(f"Применен тип {dtype} для столбца {column}")
+                    self.logger.info(f"Применен тип {dtype} для столбца {column_str}")
                 except Exception as e:
                     self.logger.warning(
-                        f"Не удалось применить тип {dtype} для {column}: {e}"
+                        f"Не удалось применить тип {dtype} для {column_str}: {e}"
                     )
 
         return df
 
     def _validate_data(self, df: pd.DataFrame) -> bool:
         """Валидация данных согласно конфигу"""
+        # Проверяем, что DataFrame не пустой
+        if df is None or df.empty:
+            error_msg = "DataFrame пустой или не содержит данных"
+            self.logger.error(error_msg)
+            messagebox.showerror("Ошибка валидации", error_msg)
+            return False
+
         validation = self.config.get("validation", {})
 
         # Проверка обязательных столбцов
         required_columns = validation.get("required_columns", [])
-        missing_columns = [col for col in required_columns if col not in df.columns]
+        missing_columns = []
+
+        # Создаем список названий столбцов в DataFrame в виде строк
+        df_column_names = []
+        for col in df.columns:
+            col_str = str(col) if col is not None else ""
+            df_column_names.append(col_str)
+
+        for required_col in required_columns:
+            # Безопасное преобразование в строку
+            required_col_str = str(required_col) if required_col is not None else ""
+            if required_col_str not in df_column_names:
+                missing_columns.append(required_col_str)
 
         if missing_columns:
             error_msg = f"Отсутствуют обязательные столбцы: {missing_columns}"
@@ -219,25 +319,44 @@ class ExcelLoaderEnhanced:
             return False
 
         # Проверка диапазона цен
-        price_columns = [col for col in df.columns if "price" in col.lower()]
+        price_columns = []
+        for col in df.columns:
+            # Безопасное преобразование в строку
+            col_str = str(col) if col is not None else ""
+            if "price" in col_str.lower():
+                price_columns.append(col)
+
         price_min = validation.get("price_min", 0)
         price_max = validation.get("price_max", float("inf"))
 
         for price_col in price_columns:
-            if price_col in df.columns:
+            # Безопасное преобразование названия столбца в строку
+            price_col_str = str(price_col) if price_col is not None else ""
+            if price_col_str in df_column_names:
                 invalid_prices = df[
-                    (df[price_col] < price_min) | (df[price_col] > price_max)
+                    (df[price_col_str] < price_min) | (df[price_col_str] > price_max)
                 ]
                 if not invalid_prices.empty:
                     self.logger.warning(
-                        f"Найдены цены вне диапазона в столбце {price_col}"
+                        f"Найдены цены вне диапазона в столбце {price_col_str}"
                     )
 
         return True
 
     def _show_file_info(self, df: pd.DataFrame, file_path: str):
         """Вывод информации о загруженном файле"""
+        # Проверяем, что DataFrame не пустой
+        if df is None or df.empty:
+            self.logger.warning("DataFrame пустой, нечего показывать")
+            return
+
         file_info = self._get_file_info(file_path)
+
+        # Безопасное преобразование названий столбцов в строки
+        column_names = []
+        for col in df.columns:
+            col_str = str(col) if col is not None else "Unknown"
+            column_names.append(col_str)
 
         info_text = f"""
 📁 Файл: {os.path.basename(file_path)}
@@ -249,7 +368,7 @@ class ExcelLoaderEnhanced:
 📅 Изменен: {file_info.get('modified', 'Unknown')}
 
 🏷️ Названия столбцов:
-{', '.join(df.columns.tolist())}
+{', '.join(column_names)}
         """
 
         print(info_text)
@@ -285,8 +404,11 @@ class ExcelLoaderEnhanced:
                 self.logger.info("Файл не выбран")
                 return None
 
-            file_path_str = str(file_path) if file_path else ""
-            if not file_path_str.lower().endswith((".xlsx", ".xls")):
+            # Безопасное преобразование в строку
+            file_path_str = str(file_path) if file_path is not None else ""
+            if not file_path_str or not file_path_str.lower().endswith(
+                (".xlsx", ".xls")
+            ):
                 error_msg = "Выбран неподдерживаемый формат файла. Поддерживаются только .xlsx и .xls файлы."
                 messagebox.showerror("Ошибка", error_msg)
                 self.logger.error(error_msg)
@@ -318,6 +440,13 @@ class ExcelLoaderEnhanced:
         """Загрузка Excel файла с применением конфигурации"""
         try:
             df = pd.read_excel(file_path, sheet_name=0)
+
+            # Проверяем, что DataFrame не пустой
+            if df is None or df.empty:
+                error_msg = f"Файл {file_path} пустой или не содержит данных"
+                self.logger.error(error_msg)
+                messagebox.showerror("Ошибка", error_msg)
+                return None
 
             # ОТКЛЮЧЕНО: Исправляем Unnamed столбцы
             # df = self._fix_unnamed_columns(df)
@@ -359,7 +488,7 @@ class ExcelLoaderEnhanced:
 
     def load_largest_file(
         self, directory_path: str, config_name: str = None
-    ) -> Optional[pd.DataFrame]:
+    ) -> Optional[Tuple[pd.DataFrame, str]]:
         """
         Загрузка самого большого Excel файла из директории
 
@@ -368,7 +497,8 @@ class ExcelLoaderEnhanced:
             config_name: Имя конфига для применения
 
         Returns:
-            pandas.DataFrame или None при ошибке
+            Tuple[pandas.DataFrame, str] или None при ошибке
+            (DataFrame, путь_к_файлу)
         """
         if config_name and config_name != self.config_name:
             self.config_name = config_name
@@ -382,11 +512,18 @@ class ExcelLoaderEnhanced:
 
             excel_files = []
             for file in os.listdir(directory_path):
+                # Безопасное преобразование в строку
                 file_str = str(file) if file is not None else ""
-                if file_str.lower().endswith((".xlsx", ".xls")):
+                if file_str and file_str.lower().endswith((".xlsx", ".xls")):
                     file_path = os.path.join(directory_path, file)
-                    file_size = os.path.getsize(file_path)
-                    excel_files.append((file_path, file_size))
+                    try:
+                        file_size = os.path.getsize(file_path)
+                        excel_files.append((file_path, file_size))
+                    except (OSError, IOError) as e:
+                        self.logger.warning(
+                            f"Не удалось получить размер файла {file_path}: {e}"
+                        )
+                        continue
 
             if not excel_files:
                 error_msg = f"Excel файлы не найдены в директории: {directory_path}"
@@ -404,8 +541,9 @@ class ExcelLoaderEnhanced:
 
             if df is not None:
                 self._show_file_info(df, file_path)
+                return df, file_path
 
-            return df
+            return None
 
         except Exception as e:
             error_msg = f"Ошибка загрузки самого большого файла: {str(e)}"
@@ -420,8 +558,18 @@ _loaders = {}
 def get_loader(config_name: str = "default") -> ExcelLoaderEnhanced:
     """Получение экземпляра загрузчика (singleton для каждого конфига)"""
     global _loaders
+    if not config_name or not isinstance(config_name, str):
+        config_name = "default"
+
     if config_name not in _loaders:
-        _loaders[config_name] = ExcelLoaderEnhanced(config_name)
+        try:
+            _loaders[config_name] = ExcelLoaderEnhanced(config_name)
+        except Exception as e:
+            print(f"Ошибка создания загрузчика для конфига {config_name}: {e}")
+            # Пробуем создать загрузчик с default конфигом
+            config_name = "default"
+            if config_name not in _loaders:
+                _loaders[config_name] = ExcelLoaderEnhanced(config_name)
     return _loaders[config_name]
 
 
@@ -435,12 +583,18 @@ def select_and_load_excel(config_name: str = "default") -> Optional[pd.DataFrame
     Returns:
         pandas.DataFrame или None при ошибке
     """
-    return get_loader(config_name).select_and_load_excel()
+    try:
+        if not config_name or not isinstance(config_name, str):
+            config_name = "default"
+        return get_loader(config_name).select_and_load_excel()
+    except Exception as e:
+        print(f"Ошибка в select_and_load_excel: {e}")
+        return None
 
 
 def load_largest_file(
     directory_path: str, config_name: str = "base"
-) -> Optional[pd.DataFrame]:
+) -> Optional[Tuple[pd.DataFrame, str]]:
     """
     Загрузка самого большого Excel файла из директории с указанным конфигом
 
@@ -449,14 +603,30 @@ def load_largest_file(
         config_name: Имя конфигурации (default, base, vitya, dima, ...)
 
     Returns:
-        pandas.DataFrame или None при ошибке
+        Tuple[pandas.DataFrame, str] или None при ошибке
+        (DataFrame, путь_к_файлу)
     """
-    return get_loader(config_name).load_largest_file(directory_path)
+    try:
+        if not directory_path or not isinstance(directory_path, str):
+            print("Некорректный путь к директории")
+            return None
+
+        if not config_name or not isinstance(config_name, str):
+            config_name = "base"
+
+        return get_loader(config_name).load_largest_file(directory_path)
+    except Exception as e:
+        print(f"Ошибка в load_largest_file: {e}")
+        return None
 
 
 def get_available_configs() -> List[str]:
     """Получение списка доступных конфигураций"""
-    return get_loader().get_available_configs()
+    try:
+        return get_loader().get_available_configs()
+    except Exception as e:
+        print(f"Ошибка при получении списка конфигов: {e}")
+        return ["default"]
 
 
 def load_with_config(file_path: str, config_name: str) -> Optional[pd.DataFrame]:
@@ -470,5 +640,16 @@ def load_with_config(file_path: str, config_name: str) -> Optional[pd.DataFrame]
     Returns:
         pandas.DataFrame или None при ошибке
     """
-    loader = get_loader(config_name)
-    return loader._load_excel_file(file_path)
+    try:
+        if not file_path or not isinstance(file_path, str):
+            print("Некорректный путь к файлу")
+            return None
+
+        if not config_name or not isinstance(config_name, str):
+            config_name = "default"
+
+        loader = get_loader(config_name)
+        return loader._load_excel_file(file_path)
+    except Exception as e:
+        print(f"Ошибка в load_with_config: {e}")
+        return None
