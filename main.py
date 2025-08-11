@@ -1,6 +1,6 @@
 """
 MiStockSync - Приложение для синхронизации прайсов
-Версия: 0.9.5
+Версия: 0.9.8
 """
 
 import tkinter as tk
@@ -35,7 +35,7 @@ try:
         load_largest_file,
     )
 except ImportError as e:
-    print(f"Ошибка импорта excel_loader: {e}")
+    # Ошибка импорта критична для работы приложения
     sys.exit(1)
 
 
@@ -119,56 +119,9 @@ class MiStockSyncApp:
         self.select_file()
 
     def on_window_resize(self, event):
-        """Обработчик изменения размера окна"""
-        # Проверяем, что это главное окно (не дочерние окна)
-        if event.widget == self.root:
-            # Получаем новые размеры
-            new_width = event.width
-            new_height = event.height
-
-            # Проверяем, что размеры действительно изменились значительно
-            current_width = self.settings.get("main_window_width", 0)
-            current_height = self.settings.get("main_window_height", 0)
-
-            # Минимальное изменение для сохранения (5 пикселей)
-            min_change = 5
-
-            if (
-                new_width > 100
-                and new_height > 100
-                and (
-                    abs(new_width - current_width) >= min_change
-                    or abs(new_height - current_height) >= min_change
-                )
-            ):
-                # Отменяем предыдущий таймер
-                if hasattr(self, "_resize_timer"):
-                    self.root.after_cancel(self._resize_timer)
-
-                # Устанавливаем новый таймер с передачей размеров (увеличиваем задержку до 2 секунд)
-                self._resize_timer = self.root.after(
-                    2000, lambda: self._save_window_size(new_width, new_height)
-                )
-
-    def _save_window_size(self, width, height):
-        """Сохранение размеров окна с задержкой"""
-        try:
-            # Проверяем, что размеры все еще актуальны
-            current_width = self.settings.get("main_window_width", 0)
-            current_height = self.settings.get("main_window_height", 0)
-
-            # Обновляем настройки только если они действительно изменились
-            if width != current_width or height != current_height:
-                self.settings["main_window_width"] = width
-                self.settings["main_window_height"] = height
-
-                # Сохраняем настройки
-                self.save_settings(self.settings)
-                self.log_info(
-                    f"💾 Размеры окна автоматически сохранены: {width}x{height}"
-                )
-        except Exception as e:
-            self.log_error(f"❌ Ошибка автоматического сохранения размеров окна: {e}")
+        """Обработчик изменения размера окна (отключен)"""
+        # Автоматическое сохранение размеров отключено
+        pass
 
     def setup_logging(self):
         """Настройка системы логирования"""
@@ -231,9 +184,6 @@ class MiStockSyncApp:
                 for key, default_value in default_settings.items():
                     if key not in settings:
                         settings[key] = default_value
-                        self.logger.info(
-                            f"⚙️ Добавлен недостающий ключ настроек: {key} = {default_value}"
-                        )
 
                 self.logger.info(f"⚙️ Настройки загружены из {settings_file}")
                 return settings
@@ -404,6 +354,15 @@ class MiStockSyncApp:
         )
         self.show_log_button.grid(row=0, column=6, padx=(10, 0))
 
+        # Кнопка тестирования базы
+        self.test_base_button = ttk.Button(
+            action_frame,
+            text="🧪 Тест базы",
+            command=self.test_base_duplicates,
+            state="normal",  # Всегда активна
+        )
+        self.test_base_button.grid(row=0, column=7, padx=(10, 0))
+
         # Продвинутый статус-бар
         self.create_advanced_status_bar(main_frame)
 
@@ -472,6 +431,19 @@ class MiStockSyncApp:
 
         self.menubar.add_cascade(label="👁️ Вид", menu=view_menu)
 
+        # === МЕНЮ "ИНСТРУМЕНТЫ" ===
+        tools_menu = tk.Menu(self.menubar, tearoff=0)
+        tools_menu.add_command(
+            label="🧪 Тест базы данных",
+            command=self.test_base_duplicates,
+            accelerator="Ctrl+T",
+        )
+        tools_menu.add_separator()
+        tools_menu.add_command(
+            label="💾 Создать резервную копию", command=self.create_backup_base
+        )
+        self.menubar.add_cascade(label="🔧 Инструменты", menu=tools_menu)
+
         # === МЕНЮ "СПРАВКА" ===
         help_menu = tk.Menu(self.menubar, tearoff=0)
         help_menu.add_command(
@@ -505,6 +477,9 @@ class MiStockSyncApp:
         # Вид
         self.root.bind("<Control-l>", lambda e: self.clear_info())
         self.root.bind("<F5>", lambda e: self.refresh_interface())
+
+        # Инструменты
+        self.root.bind("<Control-t>", lambda e: self.test_base_duplicates())
 
         # Справка
         self.root.bind("<F1>", lambda e: self.show_help())
@@ -865,9 +840,14 @@ class MiStockSyncApp:
                 self.set_status("Ошибка сохранения", "error")
 
     def compare_with_base(self):
-        """Сравнение текущего файла с базой данных"""
+        """Сравнение текущего файла с базой данных
+
+        ВАЖНО: При каждом нажатии кнопки база данных загружается заново
+        для обеспечения актуальности данных при возможных изменениях в Excel файле
+        """
         try:
             self.log_info("🔍 Начало сравнения с базой данных...")
+            self.log_info("🔄 База данных будет загружена заново для актуальности")
 
             # Сбрасываем только флаг добавления товаров, НЕ настройки окон
             self.articles_added = False
@@ -891,35 +871,41 @@ class MiStockSyncApp:
                 f"   💼 Прайс поставщика: {'✅' if self.current_df is not None else '❌'} ({self.current_config or 'неизвестно'})"
             )
             self.log_info(
-                f"   🏢 База данных: {'✅' if self.base_df is not None else '❌'}"
+                f"   🏢 База данных: {'✅' if self.base_df is not None else '❌'} (будет перезагружена)"
             )
             if self.current_df is not None:
                 self.log_info(f"   📊 Строк в прайсе: {len(self.current_df):,}")
             if self.base_df is not None:
-                self.log_info(f"   📊 Строк в базе: {len(self.base_df):,}")
+                self.log_info(
+                    f"   📊 Строк в текущей базе: {len(self.base_df):,} (данные будут обновлены)"
+                )
 
             # Шаг 1: Проверка и загрузка базы данных
             self.update_progress(1, "Загрузка базы данных")
             if self.auto_load_base_enabled:
-                self.set_status("Автозагрузка базы данных...", "loading")
+                self.set_status("Загрузка базы данных...", "loading")
                 self.root.update()
 
-                if self.base_df is None:
-                    data_dir = "data/input"
-                    result = load_largest_file(data_dir, "base")
+                # ПРИНУДИТЕЛЬНО загружаем базу заново при каждом сравнении
+                # чтобы учитывать возможные изменения в Excel файле
+                data_dir = "data/input"
+                result = load_largest_file(data_dir, "base")
 
-                    if result is None:
-                        self.finish_progress("Ошибка загрузки базы", auto_reset=False)
-                        messagebox.showerror(
-                            "Ошибка", "Не удалось загрузить базу данных"
-                        )
-                        return
+                if result is None:
+                    self.finish_progress("Ошибка загрузки базы", auto_reset=False)
+                    messagebox.showerror("Ошибка", "Не удалось загрузить базу данных")
+                    return
 
-                    self.base_df, base_file_path = result
-                    self.base_file_name = os.path.basename(base_file_path)
-                    self.log_info("База данных автоматически загружена")
-                    self.update_files_info()
+                self.base_df, base_file_path = result
+                self.base_file_name = os.path.basename(base_file_path)
+                self.log_info(
+                    f"✅ База данных загружена заново: {os.path.basename(base_file_path)}"
+                )
+                self.log_info(f"📊 Загружено строк: {len(self.base_df):,}")
+                self.update_files_info()
             else:
+                # Если автозагрузка выключена, все равно загружаем базу заново
+                # но только если пользователь подтвердит
                 if self.base_df is None:
                     self.finish_progress("База не загружена", auto_reset=False)
                     messagebox.showwarning(
@@ -927,6 +913,30 @@ class MiStockSyncApp:
                         "Сначала загрузите базу данных или включите автозагрузку",
                     )
                     return
+                else:
+                    # База уже загружена, но перезагружаем для актуальности
+                    self.set_status("Перезагрузка базы данных...", "loading")
+                    self.root.update()
+
+                    data_dir = "data/input"
+                    result = load_largest_file(data_dir, "base")
+
+                    if result is None:
+                        self.finish_progress(
+                            "Ошибка перезагрузки базы", auto_reset=False
+                        )
+                        messagebox.showerror(
+                            "Ошибка", "Не удалось перезагрузить базу данных"
+                        )
+                        return
+
+                    self.base_df, base_file_path = result
+                    self.base_file_name = os.path.basename(base_file_path)
+                    self.log_info(
+                        f"✅ База данных перезагружена: {os.path.basename(base_file_path)}"
+                    )
+                    self.log_info(f"📊 Загружено строк: {len(self.base_df):,}")
+                    self.update_files_info()
 
             # Шаг 2: Предобработка данных
             self.update_progress(2, "Предобработка данных")
@@ -1077,64 +1087,21 @@ class MiStockSyncApp:
                     f"📦 Убрали {len(found_articles)} товаров, найденных по общим кодам. Осталось: {len(unmatched_df)}"
                 )
 
-        # 5. ЧЕТВЕРТЫЙ ЭТАП: Нечеткий поиск по строкам наименований
-        self.set_status("🔍 Этап 4: Нечеткий поиск по наименованиям...", "loading")
-        self.update_progress(4, "Этап 4: Нечеткий поиск по наименованиям")
+        # 5. ЧЕТВЕРТЫЙ ЭТАП: Финальная подготовка данных
+        self.set_status("🔍 Этап 4: Финальная подготовка данных...", "loading")
+        self.update_progress(4, "Этап 4: Финальная подготовка данных")
         self.log_info(
-            f"🔍 Этап 4: Нечеткий поиск по строкам наименований для {len(unmatched_df)} товаров..."
+            f"🔍 Этап 4: Финальная подготовка {len(unmatched_df)} товаров для добавления в базу"
         )
 
-        fuzzy_candidates = (
-            unmatched_df.to_dict("records") if not unmatched_df.empty else []
-        )
-
-        self.log_info(
-            f"📊 fuzzy_candidates перед вызовом: {len(fuzzy_candidates)} элементов"
-        )
-        if fuzzy_candidates:
-            self.log_info(f"📊 Тип первого элемента: {type(fuzzy_candidates[0])}")
-            if isinstance(fuzzy_candidates[0], dict):
-                self.log_info(
-                    f"📊 Ключи первого элемента: {list(fuzzy_candidates[0].keys())}"
-                )
-
-        fuzzy_matches = []
-
-        if fuzzy_candidates:
-            self.log_info("🔍 Вызываем compare_by_fuzzy_string_matching...")
-            fuzzy_matches = self.compare_by_fuzzy_string_matching(
-                fuzzy_candidates, base_df, self.current_config
-            )
-            self.log_info(
-                f"📊 Результат нечеткого поиска: {len(fuzzy_matches)} совпадений"
-            )
-
-            # Убираем найденные товары из датафрейма непойсканных
-            if fuzzy_matches:
-                # Убираем товары по индексу, так как артикул может отсутствовать
-                found_indices = [
-                    match["supplier_index"]
-                    for match in fuzzy_matches
-                    if "supplier_index" in match
-                ]
-                unmatched_df = unmatched_df[~unmatched_df.index.isin(found_indices)]
-                self.log_info(
-                    f"📦 Убрали {len(found_indices)} товаров, найденных нечетким поиском. Осталось: {len(unmatched_df)}"
-                )
-
-        # Обновляем fuzzy_candidates после нечеткого поиска
-        self.log_info(
-            f"📊 unmatched_df после нечеткого поиска: {len(unmatched_df)} строк"
-        )
-        if not unmatched_df.empty:
-            self.log_info(f"📊 Колонки unmatched_df: {list(unmatched_df.columns)}")
-            self.log_info(
-                f"📊 Первая строка unmatched_df: {unmatched_df.iloc[0].to_dict()}"
-            )
-
-        # Создаем final_unmatched_items для возврата
+        # Оставшиеся товары - это новые товары для добавления в базу
+        # НЕ используем нечеткий поиск - просто готовим для добавления
         final_unmatched_items = (
             unmatched_df.to_dict("records") if not unmatched_df.empty else []
+        )
+
+        self.log_info(
+            f"📊 Финальное количество новых товаров: {len(final_unmatched_items)}"
         )
 
         self.set_status("✅ Сравнение завершено!", "success")
@@ -1158,9 +1125,8 @@ class MiStockSyncApp:
             "new_items": new_items,
             "code_matches": code_matches,  # Поиск по общим кодам
             "bracket_matches": bracket_matches,  # Поиск по кодам в скобках
-            "fuzzy_matches": fuzzy_matches,  # Нечеткий поиск по строкам наименований
-            "fuzzy_candidates": final_unmatched_items,  # Товары без совпадений после всех методов поиска
-            "unmatched_count": len(unmatched_df),  # Количество непойсканных товаров
+            "new_items_for_base": final_unmatched_items,  # Новые товары для добавления в базу
+            "unmatched_count": len(unmatched_df),  # Количество новых товаров
             "match_rate": (
                 len(matches) / len(supplier_dict) * 100 if supplier_dict else 0
             ),
@@ -1872,6 +1838,140 @@ class MiStockSyncApp:
         except Exception as e:
             self.log_error(f"Ошибка чтения конфигурации базы: {e}")
             return excel_column_name
+
+    def get_current_base_config(self):
+        """Получить текущую конфигурацию базы данных"""
+        try:
+            base_config_path = "excel_loader/configs/base_config.json"
+            self.log_info(f"🔍 Загружаем конфигурацию базы из: {base_config_path}")
+
+            # Проверяем существование файла
+            import os
+
+            if not os.path.exists(base_config_path):
+                self.log_error(f"❌ Файл конфигурации не найден: {base_config_path}")
+                return None
+
+            self.log_info(
+                f"✅ Файл конфигурации найден, размер: {os.path.getsize(base_config_path)} байт"
+            )
+
+            with open(base_config_path, "r", encoding="utf-8") as f:
+                base_config = json.load(f)
+
+            self.log_info(f"✅ Конфигурация успешно загружена из JSON")
+            self.log_info(f"📋 Тип загруженных данных: {type(base_config)}")
+
+            if isinstance(base_config, dict):
+                self.log_info(f"🔑 Ключи в конфигурации: {list(base_config.keys())}")
+                if "column_mapping" in base_config:
+                    self.log_info(
+                        f"📊 Количество колонок в маппинге: {len(base_config['column_mapping'])}"
+                    )
+                if "supplier_name" in base_config:
+                    self.log_info(
+                        f"🏷️ Название поставщика: {base_config['supplier_name']}"
+                    )
+            else:
+                self.log_error(f"❌ Неожиданный тип данных: {type(base_config)}")
+
+            return base_config
+        except FileNotFoundError as e:
+            self.log_error(f"❌ Файл конфигурации не найден: {e}")
+            return None
+        except json.JSONDecodeError as e:
+            self.log_error(f"❌ Ошибка парсинга JSON: {e}")
+            return None
+        except Exception as e:
+            self.log_error(f"❌ Неожиданная ошибка загрузки конфигурации базы: {e}")
+            return None
+
+    def map_supplier_to_base_data(self, match_data, supplier_config, base_config):
+        """
+        Маппит данные из конфигурации поставщика в конфигурацию базы
+
+        Args:
+            match_data: Данные товара от поставщика
+            supplier_config: Конфигурация поставщика
+            base_config: Конфигурация базы
+
+        Returns:
+            dict: Маппированные данные для базы
+        """
+        try:
+            # Маппинг данных товара
+
+            mapped_data = {}
+
+            # Получаем маппинг колонок из конфигурации базы
+            base_column_mapping = base_config.get("column_mapping", {})
+
+            # Маппим основные поля
+            if "name" in match_data:
+                mapped_data["name"] = match_data["name"]
+
+            if "color" in match_data:
+                mapped_data["color"] = match_data["color"]
+
+            # Маппим общий артикул (для колонки "Артикул" в Excel)
+            if "article" in match_data:
+                mapped_data["article"] = match_data["article"]
+            elif "supplier_article" in match_data:
+                mapped_data["article"] = match_data["supplier_article"]
+
+            # Маппим общую цену (для колонки "Цена" в Excel)
+            if "price" in match_data:
+                mapped_data["price"] = match_data["price"]
+            elif "price_usd" in match_data:
+                mapped_data["price"] = match_data["price_usd"]
+
+            # Маппим артикул в зависимости от поставщика
+            supplier_name = supplier_config.get("supplier_name", "").lower()
+            if "vitya" in supplier_name:
+                if "article_vitya" in match_data:
+                    mapped_data["article_vitya"] = match_data["article_vitya"]
+                elif "article" in match_data:
+                    mapped_data["article_vitya"] = match_data["article"]
+                if "price_usd" in match_data:
+                    mapped_data["price_vitya_usd"] = match_data["price_usd"]
+                elif "price" in match_data:
+                    mapped_data["price_vitya_usd"] = match_data["price"]
+                if "price_rub" in match_data:
+                    mapped_data["price_vitya_rub"] = match_data["price_rub"]
+            elif "dimi" in supplier_name:
+                if "article_dimi" in match_data:
+                    mapped_data["article_dimi"] = match_data["article_dimi"]
+                elif "article" in match_data:
+                    mapped_data["article_dimi"] = match_data["article"]
+                if "price_usd" in match_data:
+                    mapped_data["price_dimi_usd"] = match_data["price_usd"]
+                elif "price" in match_data:
+                    mapped_data["price_dimi_usd"] = match_data["price"]
+                if "price_rub" in match_data:
+                    mapped_data["price_dimi_rub"] = match_data["price_rub"]
+            elif "mila" in supplier_name:
+                if "article_mila" in match_data:
+                    mapped_data["article_mila"] = match_data["article_mila"]
+                elif "article" in match_data:
+                    mapped_data["article_mila"] = match_data["article"]
+                if "price_usd" in match_data:
+                    mapped_data["price_mila_usd"] = match_data["price_usd"]
+                elif "price" in match_data:
+                    mapped_data["price_mila_usd"] = match_data["price"]
+                if "price_rub" in match_data:
+                    mapped_data["price_mila_rub"] = match_data["price_rub"]
+
+            # Добавляем поставщика
+            mapped_data["supplier"] = supplier_config.get("supplier_name", "Неизвестно")
+
+            # Устанавливаем количество по умолчанию
+            mapped_data["quantity"] = 0
+
+            return mapped_data
+
+        except Exception as e:
+            self.log_error(f"❌ Ошибка маппинга данных: {e}")
+            return match_data  # Возвращаем исходные данные в случае ошибки
 
     def _get_supplier_name_column(self, supplier_df):
         """
@@ -3811,8 +3911,9 @@ class MiStockSyncApp:
                                             else "🔗 Общий код"
                                         ),
                                         "Код": change["code"],
-                                        "Строка в базе": change["base_index"]
-                                        + 2,  # +2 потому что база начинается с 1 + заголовок
+                                        "Строка в базе": change[
+                                            "base_index"
+                                        ],  # Уже содержит правильный номер строки Excel
                                         "Столбец": change["column"],
                                         "Товар в базе": (
                                             change["base_name"][:80] + "..."
@@ -4299,6 +4400,19 @@ class MiStockSyncApp:
         """
         Создать упрощенную таблицу для новых товаров с минимальными колонками
         """
+        # Сортируем новые товары по номеру строки в базе для логичного отображения
+        new_items_sorted = sorted(
+            new_items,
+            key=lambda x: (
+                x.get("base_row_number", 0)
+                if x.get("base_row_number") is not None
+                else 0
+            ),
+        )
+        self.log_info(
+            f"📊 Отсортировали {len(new_items_sorted)} новых товаров по номеру строки в базе"
+        )
+
         # Создаем основной фрейм
         self.set_status("🔧 Создание структуры таблицы новых товаров...", "loading")
         table_frame = ttk.Frame(parent_frame)
@@ -4357,9 +4471,10 @@ class MiStockSyncApp:
 
         # Добавляем данные
         self.set_status(
-            f"📊 Заполнение таблицы данными ({len(new_items)} элементов)...", "loading"
+            f"📊 Заполнение таблицы данными ({len(new_items_sorted)} элементов)...",
+            "loading",
         )
-        for i, item in enumerate(new_items):
+        for i, item in enumerate(new_items_sorted):
             # Показываем полные названия товаров без обрезания
             supplier_name = item.get("name", "")
             supplier_article = str(item.get("article", "N/A"))
@@ -4440,8 +4555,9 @@ class MiStockSyncApp:
             item = tree.identify_row(y)
             column = tree.identify_column(x)
 
-            if item and column == "#0":  # Клик в колонке чекбокса (#0)
-                for checkbox in dialog.checkboxes:
+            if item:  # Клик по любой части строки
+                # Ищем только среди чекбоксов новых товаров для этой вкладки
+                for checkbox in dialog.new_item_checkboxes:
                     if hasattr(checkbox, "item_id") and checkbox.item_id == item:
                         old_value = checkbox.var.get()
                         checkbox.var.set(not old_value)
@@ -4455,7 +4571,8 @@ class MiStockSyncApp:
 
             # Если клик по колонке с названием товара (supplier_name) или любой другой колонке кроме чекбокса
             if item and column != "#0":
-                for checkbox in dialog.checkboxes:
+                # Ищем только среди чекбоксов новых товаров для этой вкладки
+                for checkbox in dialog.new_item_checkboxes:
                     if hasattr(checkbox, "item_id") and checkbox.item_id == item:
                         old_value = checkbox.var.get()
                         checkbox.var.set(not old_value)
@@ -4551,7 +4668,7 @@ class MiStockSyncApp:
                 if not base_color:
                     base_color = "N/A"
 
-                # Получаем цену из базы
+                # Получаем цену из базы здесь исправить на получение минимальной цены из прайсов поставщиков в базе
                 base_price_value = self.base_df.iloc[best_idx].get("price_usd", 0)
                 if base_price_value is None or pd.isna(base_price_value):
                     base_price = "N/A"
@@ -4562,10 +4679,17 @@ class MiStockSyncApp:
                         base_price = "N/A"
 
                 # Получаем реальный номер строки в Excel файле
-                # Используем iloc для получения реального индекса строки
-                excel_row_number = (
-                    self.base_df.index.get_loc(best_idx) + 2
-                )  # +2 для Excel (заголовок + 1-индексация)
+                # best_idx - это индекс DataFrame, нужно получить реальную позицию в файле
+                # Используем enumerate для получения реальной позиции строки
+                excel_row_number = None
+                for i, (idx, _) in enumerate(self.base_df.iterrows(), 1):
+                    if idx == best_idx:
+                        excel_row_number = i + 1  # +1 для Excel (заголовок)
+                        break
+
+                if excel_row_number is None:
+                    # Fallback: используем старый метод
+                    excel_row_number = self.base_df.index.get_loc(best_idx) + 2
 
                 return (
                     best_match,
@@ -4595,7 +4719,7 @@ class MiStockSyncApp:
 
     def show_help(self):
         """Показать справку по использованию"""
-        help_text = """🚀 MiStockSync - Справка
+        help_text = """🚀 MiStockSync v0.9.8 - Справка
 
 📁 Загрузка файлов:
 • Файлы Вити должны содержать 'JHT' в названии
@@ -5334,17 +5458,27 @@ class MiStockSyncApp:
         button_frame = ttk.Frame(dialog)
         button_frame.pack(fill="x", padx=10, pady=10)
 
-        # Кнопки управления
+        # Кнопки управления - работают со всеми вкладками
+        def select_all_tabs():
+            """Выбрать все на всех вкладках"""
+            self.select_all_matches(dialog, dialog.code_checkboxes)
+            self.select_all_matches(dialog, dialog.new_item_checkboxes)
+
+        def deselect_all_tabs():
+            """Снять все на всех вкладках"""
+            self.deselect_all_matches(dialog, dialog.code_checkboxes)
+            self.deselect_all_matches(dialog, dialog.new_item_checkboxes)
+
         ttk.Button(
             button_frame,
-            text="✅ Выбрать все",
-            command=lambda: self.select_all_matches(dialog),
+            text="✅ Выбрать все на вкладках",
+            command=select_all_tabs,
         ).pack(side="left", padx=5)
 
         ttk.Button(
             button_frame,
-            text="❌ Снять все",
-            command=lambda: self.deselect_all_matches(dialog),
+            text="❌ Снять все на вкладках",
+            command=deselect_all_tabs,
         ).pack(side="left", padx=5)
 
         # Разделитель
@@ -5422,6 +5556,14 @@ class MiStockSyncApp:
     def create_matches_table(self, parent_frame, matches, match_type, dialog):
         """Создать таблицу совпадений с чекбоксами используя Treeview для лучшего выравнивания"""
 
+        # Сортируем совпадения по артикулу поставщика для логичного отображения
+        matches_sorted = sorted(
+            matches, key=lambda x: str(x.get("supplier_article", "")).lower()
+        )
+        self.log_info(
+            f"📊 Отсортировали {len(matches_sorted)} совпадений по артикулу поставщика"
+        )
+
         # Создаем основной фрейм
         self.set_status(f"🔧 Создание таблицы совпадений {match_type}...", "loading")
         table_frame = ttk.Frame(parent_frame)
@@ -5484,9 +5626,10 @@ class MiStockSyncApp:
 
         # Добавляем данные
         self.set_status(
-            f"📊 Заполнение таблицы совпадений ({len(matches)} элементов)...", "loading"
+            f"📊 Заполнение таблицы совпадений ({len(matches_sorted)} элементов)...",
+            "loading",
         )
-        for i, match in enumerate(matches):
+        for i, match in enumerate(matches_sorted):
             # Показываем полные названия товаров без обрезания
             supplier_name = match.get("supplier_name", "")
             base_name = match.get("base_name", "")
@@ -5560,14 +5703,47 @@ class MiStockSyncApp:
             item = tree.identify_row(y)
             column = tree.identify_column(x)
 
-            if item and column == "#1":  # Клик в первой колонке (чекбокс)
-                # Находим соответствующий чекбокс
-                for checkbox in dialog.checkboxes:
+            if item:  # Клик по любой части строки
+                # Находим соответствующий чекбокс в зависимости от типа вкладки
+                checkbox_list = None
+                if match_type == "code":
+                    checkbox_list = dialog.code_checkboxes
+                elif match_type == "bracket":
+                    checkbox_list = (
+                        dialog.code_checkboxes
+                    )  # bracket тоже в code_checkboxes
+                else:
+                    checkbox_list = dialog.checkboxes  # fallback
+
+                for checkbox in checkbox_list:
+                    if hasattr(checkbox, "item_id") and checkbox.item_id == item:
+                        checkbox.var.set(not checkbox.var.get())
+                        break
+
+        # Функция для переключения чекбокса по двойному клику на всю строку
+        def on_item_double_click(event):
+            x, y = event.x, event.y
+            item = tree.identify_row(y)
+
+            if item:  # Двойной клик по любой части строки
+                # Находим соответствующий чекбокс в зависимости от типа вкладки
+                checkbox_list = None
+                if match_type == "code":
+                    checkbox_list = dialog.code_checkboxes
+                elif match_type == "bracket":
+                    checkbox_list = (
+                        dialog.code_checkboxes
+                    )  # bracket тоже в code_checkboxes
+                else:
+                    checkbox_list = dialog.checkboxes  # fallback
+
+                for checkbox in checkbox_list:
                     if hasattr(checkbox, "item_id") and checkbox.item_id == item:
                         checkbox.var.set(not checkbox.var.get())
                         break
 
         tree.bind("<Button-1>", on_item_click)
+        tree.bind("<Double-Button-1>", on_item_double_click)
 
         # Упаковываем компоненты
         tree.grid(row=0, column=0, sticky="nsew")
@@ -5595,6 +5771,15 @@ class MiStockSyncApp:
 
     def process_selected_articles(self, dialog, code_matches, new_items):
         """Обработать выбранные пользователем артикулы"""
+
+        # Инициализируем лог изменений
+        if not hasattr(self, "changes_log"):
+            self.changes_log = []
+        elif not isinstance(self.changes_log, list):
+            self.log_error(
+                f"❌ Некорректный тип self.changes_log: {type(self.changes_log)}"
+            )
+            self.changes_log = []
 
         # Собираем выбранные совпадения
         selected_matches = []
@@ -5802,9 +5987,27 @@ class MiStockSyncApp:
                                 if not hasattr(self, "changes_log"):
                                     self.changes_log = []
 
+                                # Получаем реальный номер строки в Excel файле
+                                # base_idx - это индекс DataFrame, нужно получить реальную позицию в файле
+                                excel_row_number = None
+                                for i, (idx, _) in enumerate(
+                                    self.base_df.iterrows(), 1
+                                ):
+                                    if idx == base_idx:
+                                        excel_row_number = (
+                                            i + 1
+                                        )  # +1 для Excel (заголовок)
+                                        break
+
+                                if excel_row_number is None:
+                                    # Fallback: используем старый метод
+                                    excel_row_number = (
+                                        self.base_df.index.get_loc(base_idx) + 2
+                                    )
+
                                 change_info = {
                                     "type": "article_added",
-                                    "base_index": base_idx,
+                                    "base_index": excel_row_number,  # Реальный номер строки в Excel
                                     "code": code,
                                     "match_type": match_type,
                                     "column": excel_column_name,
@@ -5901,7 +6104,6 @@ class MiStockSyncApp:
 
                 # Собираем номера строк для вставки
                 row_numbers_to_insert = []
-                processed_items = set()  # Для отслеживания уже обработанных товаров
 
                 self.set_status(
                     f"🔍 Анализ {len(selected_new_items)} новых товаров...", "loading"
@@ -5914,9 +6116,16 @@ class MiStockSyncApp:
                     base_row_number = new_item.get("base_row_number")
                     item_name = new_item["match_data"].get("name", "N/A")
 
+                    # Получаем артикул товара для отображения в статусе
+                    supplier_article = (
+                        new_item["match_data"].get("supplier_article")
+                        or new_item["match_data"].get("article")
+                        or "N/A"
+                    )
+
                     # Обновляем статус для каждого товара
                     self.set_status(
-                        f"🔍 Анализ {i}/{len(selected_new_items)}: {item_name[:40]}...",
+                        f"🔍 Анализ {i}/{len(selected_new_items)}: {item_name[:40]} (артикул: {supplier_article})...",
                         "loading",
                     )
 
@@ -5925,29 +6134,51 @@ class MiStockSyncApp:
                         try:
                             row_num = int(base_row_number)
                             if row_num > 0:
-                                # Проверяем, не обрабатывали ли мы уже этот товар
-                                item_key = f"{item_name}_{row_num}"
-                                if item_key not in processed_items:
-                                    row_numbers_to_insert.append(row_num)
-                                    processed_items.add(item_key)
-                                    self.log_info(
-                                        f"📝 Новый товар '{item_name}' - вставка строки после {row_num}"
-                                    )
-                                else:
-                                    self.log_info(
-                                        f"⚠️ Товар '{item_name}' уже обработан для строки {row_num}, пропускаем"
-                                    )
+                                # Добавляем все товары без проверки дубликатов
+                                row_numbers_to_insert.append(row_num)
+
+                                # Получаем артикул товара
+                                supplier_article = (
+                                    new_item["match_data"].get("supplier_article")
+                                    or new_item["match_data"].get("article")
+                                    or "N/A"
+                                )
+
+                                self.log_info(
+                                    f"📝 Новый товар '{item_name}' (артикул: {supplier_article}) - вставка строки после {row_num}"
+                                )
                             else:
+                                # Получаем артикул товара для логирования ошибки
+                                supplier_article = (
+                                    new_item["match_data"].get("supplier_article")
+                                    or new_item["match_data"].get("article")
+                                    or "N/A"
+                                )
+
                                 self.log_error(
-                                    f"❌ Некорректный номер строки {row_num} для товара '{item_name}'"
+                                    f"❌ Некорректный номер строки {row_num} для товара '{item_name}' (артикул: {supplier_article})"
                                 )
                         except (ValueError, TypeError) as e:
+                            # Получаем артикул товара для логирования ошибки
+                            supplier_article = (
+                                new_item["match_data"].get("supplier_article")
+                                or new_item["match_data"].get("article")
+                                or "N/A"
+                            )
+
                             self.log_error(
-                                f"❌ Ошибка преобразования номера строки '{base_row_number}' для товара '{item_name}': {e}"
+                                f"❌ Ошибка преобразования номера строки '{base_row_number}' для товара '{item_name}' (артикул: {supplier_article}): {e}"
                             )
                     else:
+                        # Получаем артикул товара для логирования
+                        supplier_article = (
+                            new_item["match_data"].get("supplier_article")
+                            or new_item["match_data"].get("article")
+                            or "N/A"
+                        )
+
                         self.log_info(
-                            f"⚠️ Новый товар '{item_name}' - не найден в базе, пропускаем"
+                            f"⚠️ Новый товар '{item_name}' (артикул: {supplier_article}) - не найден в базе, пропускаем"
                         )
 
                     # Обновляем прогресс каждые 3 товара
@@ -5960,7 +6191,25 @@ class MiStockSyncApp:
                         self.root.update()
 
                 self.log_info(
-                    f"📊 Итого уникальных строк для вставки: {len(row_numbers_to_insert)}"
+                    f"📊 Итого строк для вставки: {len(row_numbers_to_insert)}"
+                )
+
+                # Сортируем номера строк по возрастанию для правильной вставки
+                row_numbers_to_insert.sort()
+                self.log_info(
+                    f"📊 Отсортированные номера строк для вставки: {row_numbers_to_insert}"
+                )
+
+                # Также сортируем selected_new_items по номеру строки для логичного отображения
+                selected_new_items.sort(
+                    key=lambda x: (
+                        x.get("base_row_number", 0)
+                        if x.get("base_row_number") is not None
+                        else 0
+                    )
+                )
+                self.log_info(
+                    f"📊 Отсортированные новые товары по номеру строки в базе"
                 )
 
                 # Вставляем пустые строки в Excel
@@ -6027,12 +6276,18 @@ class MiStockSyncApp:
                                     f"Вставка {len(row_numbers_to_insert)} пустых строк в Excel",
                                 )
 
-                                self.insert_empty_rows_in_excel(
-                                    original_path, row_numbers_to_insert
+                                rows_inserted = self.insert_rows_with_items(
+                                    original_path,
+                                    row_numbers_to_insert,
+                                    selected_new_items,
                                 )
-                                rows_inserted = len(row_numbers_to_insert)
                                 self.log_info(
                                     f"✅ Вставлено {rows_inserted} пустых строк в Excel файл"
+                                )
+
+                                # Теперь добавляем новые товары в пустые строки
+                                self.log_info(
+                                    f"📝 Готово к добавлению {len(selected_new_items)} новых товаров в {len(row_numbers_to_insert)} пустых строк"
                                 )
                             else:
                                 self.log_error(
@@ -6048,7 +6303,13 @@ class MiStockSyncApp:
                         )
 
             # Обновляем список кандидатов для ИИ (убираем обработанные)
+            self.log_info(f"🔄 Обновление списка кандидатов для ИИ...")
+            self.log_info(
+                f"📊 Обрабатываем: {len(selected_matches)} обычных совпадений + {len(selected_new_items)} новых товаров"
+            )
             processed_articles = []
+
+            # Добавляем артикулы из обычных совпадений
             for selected in selected_matches:
                 match = selected["match_data"]
                 supplier_article = match.get("supplier_article") or match.get("article")
@@ -6061,25 +6322,60 @@ class MiStockSyncApp:
                         str(supplier_article)
                     )  # Преобразуем в строку!
 
+            # Добавляем артикулы из новых товаров (важно для правильного подсчета!)
+            for selected in selected_new_items:
+                match = selected["match_data"]
+                supplier_article = match.get("supplier_article") or match.get("article")
+                if supplier_article and str(supplier_article).strip() not in [
+                    "",
+                    "nan",
+                    "None",
+                ]:
+                    processed_articles.append(
+                        str(supplier_article)
+                    )  # Преобразуем в строку!
+
+            self.log_info(
+                f"📋 Собрано {len(processed_articles)} артикулов для исключения из кандидатов ИИ"
+            )
+
             # Обновляем comparison_result - убираем обработанные товары из new_items
             if self.comparison_result and "new_items" in self.comparison_result:
                 original_count = len(self.comparison_result["new_items"])
+
+                # Подсчитываем, сколько товаров каждого типа обработано
+                matches_count = len(
+                    [
+                        a
+                        for a in processed_articles
+                        if a
+                        in [
+                            item.get("article")
+                            for item in self.comparison_result["new_items"]
+                        ]
+                    ]
+                )
+
                 self.comparison_result["new_items"] = [
                     item
                     for item in self.comparison_result["new_items"]
                     if item.get("article") not in processed_articles
                 ]
                 new_count = len(self.comparison_result["new_items"])
+
                 self.log_info(
                     f"📉 Кандидатов для ИИ: было {original_count}, стало {new_count}"
                 )
+                self.log_info(
+                    f"📊 Обработано товаров: обычных совпадений {len(selected_matches)}, новых товаров {len(selected_new_items)}"
+                )
+                if matches_count > 0:
+                    self.log_info(
+                        f"🔄 Из {original_count} кандидатов для ИИ убрано {matches_count} обработанных товаров"
+                    )
 
             # Обновляем отображение в основном окне
-            self.update_main_window_info(
-                articles_added + rows_inserted,
-                len(selected_matches) + len(selected_new_items),
-                processed_articles,
-            )
+            self.update_files_info()
 
             # Завершаем прогресс
             self.set_status("✅ Обработка завершена!", "success")
@@ -6087,7 +6383,7 @@ class MiStockSyncApp:
 
             result_message = f"Обработка завершена!\n\n"
             result_message += f"🔗 Артикулов добавлено: {articles_added}\n"
-            result_message += f"📝 Пустых строк вставлено: {rows_inserted}\n"
+            result_message += f"📝 Новых строк вставлено: {rows_inserted}\n"
             result_message += f"📋 Выбрано для обработки: {len(selected_matches) + len(selected_new_items)}\n"
             if processed_articles:
                 result_message += (
@@ -6127,16 +6423,11 @@ class MiStockSyncApp:
 
                 if original_path:
                     try:
-                        # Точечное обновление с сохранением форматирования
-                        if hasattr(self, "changes_log") and self.changes_log:
-                            self.update_excel_articles_preserve_formatting(
-                                original_path, self.changes_log
-                            )
-                        else:
-                            # Fallback - простое сохранение
-                            self.base_df.to_excel(
-                                original_path, index=False, engine="openpyxl"
-                            )
+                        # Всегда используем точечное обновление с сохранением форматирования
+                        self.update_excel_articles_preserve_formatting(
+                            original_path,
+                            self.changes_log if hasattr(self, "changes_log") else [],
+                        )
 
                         self.log_info(
                             f"💾 База данных обновлена: {os.path.basename(original_path)}"
@@ -6144,7 +6435,7 @@ class MiStockSyncApp:
                         if articles_added > 0:
                             result_message += f"\n💾 Артикулы добавлены в базу"
                         if rows_inserted > 0:
-                            result_message += f"\n💾 Пустые строки вставлены в Excel"
+                            result_message += f"\n💾 Новые строки вставлены в Excel"
                     except Exception as save_error:
                         self.log_error(f"❌ Ошибка сохранения: {save_error}")
                         messagebox.showerror(
@@ -6177,60 +6468,13 @@ class MiStockSyncApp:
                 f"Артикулов добавлено: {articles_added}", auto_reset=True
             )
             self.set_status(
-                f"✅ Успешно добавлено {articles_added} артикулов в базу", "success"
+                f"✅ Успешно добавлено {articles_added} артикулов и {rows_inserted} новых товаров в базу",
+                "success",
             )
 
         except Exception as e:
             self.log_error(f"❌ Ошибка добавления артикулов: {e}")
             self.finish_progress("Ошибка добавления артикулов", auto_reset=True)
-
-    def update_main_window_info(
-        self, articles_added, selected_count, processed_articles
-    ):
-        """Обновляет информацию в основном окне о добавленных артикулах"""
-
-        # Добавляем информацию в основное текстовое поле
-        from datetime import datetime
-
-        timestamp = datetime.now().strftime("%H:%M:%S")
-
-        info_text = f"\n{'='*60}\n"
-        info_text += f"[{timestamp}] 🔗 ДОБАВЛЕНИЕ АРТИКУЛОВ ЗАВЕРШЕНО\n"
-        info_text += f"{'='*60}\n"
-        info_text += f"✅ Артикулов добавлено в базу: {articles_added}\n"
-        info_text += f"📋 Выбрано пользователем: {selected_count}\n"
-
-        if articles_added > 0:
-            info_text += f"📝 Добавленные артикулы:\n"
-            for i, article in enumerate(processed_articles[:10], 1):
-                info_text += f"   {i}. {article}\n"
-            if len(processed_articles) > 10:
-                info_text += f"   ... и еще {len(processed_articles) - 10} артикулов\n"
-        else:
-            info_text += f"⚠️ Возможные причины:\n"
-            info_text += f"   • Артикулы уже существуют в базе\n"
-            info_text += f"   • Ошибка в данных или индексах\n"
-            info_text += f"   • Проблема со столбцами базы данных\n"
-
-        # Информация об обновленном списке кандидатов для ИИ
-        if (
-            hasattr(self, "comparison_result")
-            and self.comparison_result
-            and "new_items" in self.comparison_result
-        ):
-            remaining_count = len(self.comparison_result["new_items"])
-            info_text += f"\n🤖 Кандидатов для ИИ обработки: {remaining_count}\n"
-
-        info_text += f"{'='*60}\n"
-
-        # Добавляем в текстовое поле основного окна, если оно существует
-        if hasattr(self, "info_text"):
-            self.info_text.insert(tk.END, info_text)
-            self.info_text.see(tk.END)  # Прокручиваем к концу
-
-        # Обновляем состояние кнопок (количество новых товаров могло измениться)
-        # Передаем информацию о том, что артикулы были добавлены в этом сеансе
-        self.update_buttons_state(articles_added_this_run=(articles_added > 0))
 
     def show_settings(self):
         """Показать окно настроек с автозагрузкой базы"""
@@ -6508,13 +6752,13 @@ class MiStockSyncApp:
 
         # Название и версия
         ttk.Label(
-            main_frame, text="MiStockSync v0.0.9", font=("Arial", 14, "bold")
+            main_frame, text="MiStockSync v0.9.8", font=("Arial", 14, "bold")
         ).pack(pady=5)
 
         # Дата
         ttk.Label(
             main_frame,
-            text=f"📅 {datetime.now().strftime('%Y-%m-%d')}",
+            text="📅 11.08.25",
             font=("Arial", 9),
         ).pack()
 
@@ -6750,8 +6994,6 @@ class MiStockSyncApp:
                 shutil.copy(original_path, backup_path)
 
                 self.log_info(f"💾 Резервная копия создана: {backup_filename}")
-                self.log_info(f"📁 Путь: {backup_path}")
-                self.log_info(f"📄 Оригинал: {os.path.basename(original_path)}")
 
                 return True
             else:
@@ -7012,6 +7254,13 @@ class MiStockSyncApp:
         try:
             from openpyxl import load_workbook
 
+            # Проверяем корректность параметра changes_log
+            if changes_log is None:
+                changes_log = []
+            elif not isinstance(changes_log, list):
+                self.log_error(f"❌ Некорректный тип changes_log: {type(changes_log)}")
+                changes_log = []
+
             # Загружаем рабочую книгу
             workbook = load_workbook(file_path)
             worksheet = workbook.active
@@ -7028,8 +7277,9 @@ class MiStockSyncApp:
             for change in changes_log:
                 if change["type"] == "article_added":
                     try:
-                        # Определяем номер строки в Excel (base_index + 2, т.к. DataFrame index начинается с 0, а Excel с 1, плюс заголовок)
-                        excel_row = change["base_index"] + 2
+                        # Определяем номер строки в Excel
+                        # base_index уже содержит правильный номер строки в Excel (без +2)
+                        excel_row = change["base_index"]
 
                         # Определяем столбец для записи - используем оригинальное имя из конфигурации
                         original_column_name = change[
@@ -7103,17 +7353,36 @@ class MiStockSyncApp:
             self.base_df.to_excel(file_path, index=False, engine="openpyxl")
             self.log_info("💾 Использовано резервное сохранение через pandas")
 
-    def insert_empty_rows_in_excel(self, file_path, row_numbers):
+    def insert_rows_with_items(self, file_path, row_numbers, selected_new_items=None):
         """
-        Вставка пустых строк в Excel файл под указанными номерами строк
+        Вставка строк с товарами в Excel файл под указанными номерами строк.
+
+        Метод выполняет следующие операции:
+        1. Открывает Excel файл и проверяет права доступа
+        2. Вставляет пустые строки после указанных номеров строк
+        3. Если переданы selected_new_items, заполняет вставленные строки данными товаров
+        4. Сохраняет изменения в файл
+        5. Возвращает количество успешно вставленных строк
 
         Args:
-            file_path: Путь к Excel файлу
-            row_numbers: Список номеров строк (начиная с 1), после которых нужно вставить пустые строки
+            file_path (str): Путь к Excel файлу для модификации
+            row_numbers (list): Список номеров строк (начиная с 1), после которых нужно вставить строки
+            selected_new_items (list, optional): Список выбранных новых товаров для вставки в строки.
+                                               Если None, вставляются только пустые строки.
+
+        Returns:
+            int: Количество успешно вставленных строк
+
+        Raises:
+            FileNotFoundError: Если файл не найден
+            PermissionError: Если нет прав доступа к файлу
+            Exception: При ошибках работы с Excel или сохранения файла
         """
         try:
             from openpyxl import load_workbook
             import os
+
+            # Проверяем входные параметры
 
             # Проверяем, что файл существует и доступен
             if not os.path.exists(file_path):
@@ -7130,9 +7399,64 @@ class MiStockSyncApp:
             workbook = load_workbook(file_path)
             worksheet = workbook.active
 
+            # Получаем заголовки для определения номеров столбцов
+            headers = {}
+            for col in range(1, worksheet.max_column + 1):
+                cell_value = worksheet.cell(row=1, column=col).value
+                if cell_value:
+                    headers[str(cell_value).lower().strip()] = col
+
+            self.log_info(f"📋 Заголовки Excel: {list(headers.keys())}")
+
+            # Получаем максимальный артикул из столбца "Артикул" для автоматической нумерации
+            max_article_number = 0
+            if "артикул" in headers:
+                article_col = headers["артикул"]
+                self.log_info(
+                    f"🔍 Ищем максимальный артикул в столбце 'Артикул' (позиция {article_col})"
+                )
+
+                # Проходим по всем строкам и ищем максимальное числовое значение
+                for row in range(
+                    2, worksheet.max_row + 1
+                ):  # Начинаем со 2-й строки (после заголовка)
+                    cell_value = worksheet.cell(row=row, column=article_col).value
+                    if cell_value:
+                        try:
+                            # Пытаемся преобразовать в число
+                            if isinstance(cell_value, str):
+                                # Убираем пробелы и проверяем, что это число
+                                clean_value = str(cell_value).strip()
+                                if clean_value.isdigit():
+                                    article_num = int(clean_value)
+                                    max_article_number = max(
+                                        max_article_number, article_num
+                                    )
+                            elif isinstance(cell_value, (int, float)):
+                                article_num = int(cell_value)
+                                max_article_number = max(
+                                    max_article_number, article_num
+                                )
+                        except (ValueError, TypeError):
+                            continue
+
+                self.log_info(
+                    f"📊 Максимальный найденный артикул: {max_article_number}"
+                )
+            else:
+                self.log_info("⚠️ Столбец 'Артикул' не найден в Excel файле")
+
+            # Получаем текущую конфигурацию базы для маппинга данных
+            base_config = None
+            if selected_new_items:
+                base_config = self.get_current_base_config()
+                if not base_config:
+                    self.log_error("❌ Не удалось получить конфигурацию базы")
+                    workbook.close()
+                    return 0
+
             # Получаем максимальное количество строк
             max_row = worksheet.max_row
-            self.log_info(f"📏 Максимальная строка в файле: {max_row}")
 
             # Проверяем корректность номеров строк
             valid_row_numbers = []
@@ -7156,11 +7480,12 @@ class MiStockSyncApp:
                 workbook.close()
                 return 0
 
-            # Убираем дубликаты и сортируем по убыванию
-            unique_rows = list(set(valid_row_numbers))
-            sorted_rows = sorted(unique_rows, reverse=True)
-
-            self.log_info(f"📝 Уникальные строки для вставки: {sorted_rows}")
+            #
+            # sorted_rows = sorted(valid_row_numbers, reverse=True)
+            sorted_rows = valid_row_numbers
+            # Сортируем строки для вставки
+            self.log_info(f"📊 Уникальные строки для вставки: {sorted_rows}")
+            self.log_info(f"📝 Строки для вставки (по убыванию): {sorted_rows}")
 
             rows_inserted = 0
 
@@ -7174,12 +7499,439 @@ class MiStockSyncApp:
 
                     # Вставляем пустую строку после указанной строки
                     # openpyxl использует 1-индексацию
-                    worksheet.insert_rows(row_num + 1)
+                    worksheet.insert_rows(row_num + 1 + rows_inserted)
 
                     self.log_info(
-                        f"📝 Excel: вставлена пустая строка после строки {row_num}"
+                        f"📝 Excel: вставлена пустая строка после строки {row_num + rows_inserted-1}"
                     )
+
                     rows_inserted += 1
+
+                    # Если есть новые товары, вставляем их в пустую строку
+                    if selected_new_items and i <= len(selected_new_items):
+                        self.log_info(
+                            f"📦 Товары переданы: {len(selected_new_items)}, обрабатываем товар {i}"
+                        )
+                    else:
+                        if not selected_new_items:
+                            self.log_info(
+                                f"⚠️ Товары не переданы (selected_new_items is None или пустой)"
+                            )
+                        else:
+                            self.log_info(
+                                f"⚠️ Товар {i} не обрабатывается: i={i}, len(selected_new_items)={len(selected_new_items)}"
+                            )
+
+                    if selected_new_items and i <= len(selected_new_items):
+                        try:
+                            self.log_info(
+                                f"🔍 Обрабатываем товар {i}/{len(selected_new_items)} для строки {row_num  + rows_inserted}"
+                            )
+
+                            # Краткое логирование base_config для каждого товара
+                            if not base_config:
+                                self.log_error("❌ BASE_CONFIG равен None!")
+
+                            new_item = selected_new_items[
+                                i - 1
+                            ]  # i-1 потому что enumerate начинается с 1
+                            match_data = new_item["match_data"]
+                            supplier_config = new_item.get("supplier_config", {})
+
+                            # Инициализируем основные переменные товара
+                            supplier_article = (
+                                match_data.get("supplier_article")
+                                or match_data.get("article")
+                                or "N/A"
+                            )
+                            supplier_price = (
+                                match_data.get("price_usd")
+                                or match_data.get("price")
+                                or 0
+                            )
+                            supplier_color = match_data.get("color") or "N/A"
+
+                            # Логируем только текущий конфиг один раз
+                            if i == 1:  # Только для первого товара
+                                self.log_info(
+                                    f"🔍 Текущий конфиг: {self.current_config}"
+                                )
+
+                            # Определяем столбец артикула поставщика в базе (как в строках 5760-5765)
+                            if self.current_config == "vitya":
+                                supplier_article_col = "article_vitya"
+                            elif self.current_config == "dimi":
+                                supplier_article_col = "article_dimi"
+                            else:
+                                supplier_article_col = "article"
+
+                            # Определяем столбец цены поставщика в базе
+                            if self.current_config == "vitya":
+                                supplier_price_col = "price_vitya_usd"
+                            elif self.current_config == "dimi":
+                                supplier_price_col = "price_dimi_usd"
+                            else:
+                                supplier_price_col = "price"
+
+                            # Логируем используемые столбцы только для первого товара
+                            if i == 1:  # Только для первого товара
+                                self.log_info(
+                                    f"🔍 Используем столбец артикула: {supplier_article_col}, столбец цены: {supplier_price_col}"
+                                )
+
+                            # Заполняем артикул поставщика
+                            # Проверяем маппинг для столбца артикула
+                            article_mapping_found = any(
+                                internal_name == supplier_article_col
+                                for internal_name in base_config.get(
+                                    "column_mapping", {}
+                                ).values()
+                            )
+                            # Убираем избыточное логирование проверки маппинга
+
+                            # Получаем название колонки артикула из маппинга
+                            excel_article_col_name = None
+                            for excel_name, internal_name in base_config.get(
+                                "column_mapping", {}
+                            ).items():
+                                if internal_name == supplier_article_col:
+                                    excel_article_col_name = excel_name
+                                    break
+
+                            if excel_article_col_name is not None:
+                                # Убираем избыточное логирование найденного маппинга
+                                excel_article_col = None
+
+                                # Ищем столбец артикула в Excel
+                                # Убираем избыточное логирование поиска столбца
+
+                                for header_name, col_num in headers.items():
+                                    if (
+                                        header_name
+                                        == excel_article_col_name.lower().strip()
+                                    ):
+                                        excel_article_col = col_num
+                                        # Убираем избыточное логирование найденного столбца
+                                        break
+
+                                if excel_article_col is not None:
+                                    # Определяем тип данных для столбца артикула
+                                    data_type = self.get_column_data_type(
+                                        supplier_article_col
+                                    )
+                                    # Убираем избыточное логирование типа данных
+
+                                    try:
+                                        # Преобразуем значение к нужному типу
+                                        if data_type == "int":
+                                            article_value = int(supplier_article)
+                                        elif data_type == "float":
+                                            article_value = float(supplier_article)
+                                        else:
+                                            article_value = str(supplier_article)
+
+                                        # Убираем избыточное логирование преобразованного значения
+
+                                        # Записываем артикул в ячейку с учетом смещения от ранее вставленных строк
+                                        cell = worksheet.cell(
+                                            row=row_num + rows_inserted,
+                                            column=excel_article_col,
+                                        )
+                                        cell.value = article_value
+
+                                        # Убираем избыточное логирование записи артикула
+                                    except (ValueError, TypeError) as e:
+                                        self.log_error(
+                                            f"❌ Ошибка преобразования артикула '{supplier_article}': {e}"
+                                        )
+                                else:
+                                    self.log_info(
+                                        f"⚠️ Столбец артикула '{excel_article_col_name}' не найден в Excel"
+                                    )
+                            else:
+                                self.log_info(
+                                    f"❌ Маппинг для внутреннего названия '{supplier_article_col}' не найден в конфигурации"
+                                )
+
+                            # Заполняем цену поставщика
+                            # Проверяем маппинг для столбца цены
+                            price_mapping_found = any(
+                                internal_name == supplier_price_col
+                                for internal_name in base_config.get(
+                                    "column_mapping", {}
+                                ).values()
+                            )
+                            # Проверяем маппинг для столбца цены
+                            price_mapping_found = any(
+                                internal_name == supplier_price_col
+                                for internal_name in base_config.get(
+                                    "column_mapping", {}
+                                ).values()
+                            )
+
+                            # Получаем название колонки цены из маппинга
+                            excel_price_col_name = None
+                            for excel_name, internal_name in base_config.get(
+                                "column_mapping", {}
+                            ).items():
+                                if internal_name == supplier_price_col:
+                                    excel_price_col_name = excel_name
+                                    break
+
+                            if excel_price_col_name is not None:
+                                # Убираем избыточное логирование найденного маппинга цены
+                                excel_price_col = None
+
+                                # Ищем столбец цены в Excel
+                                # Убираем избыточное логирование поиска столбца цены
+
+                                for header_name, col_num in headers.items():
+                                    if (
+                                        header_name
+                                        == excel_price_col_name.lower().strip()
+                                    ):
+                                        excel_price_col = col_num
+                                        # Убираем избыточное логирование найденного столбца цены
+                                        break
+
+                                if excel_price_col is not None:
+                                    # Определяем тип данных для столбца цены
+                                    data_type = self.get_column_data_type(
+                                        supplier_price_col
+                                    )
+                                    # Убираем избыточное логирование типа данных для цены
+
+                                    try:
+                                        # Преобразуем значение к нужному типу
+                                        if data_type == "int":
+                                            price_value = int(float(supplier_price))
+                                        elif data_type == "float":
+                                            price_value = float(supplier_price)
+                                        else:
+                                            price_value = str(supplier_price)
+
+                                        # Убираем избыточное логирование преобразованного значения цены
+
+                                        # Записываем цену в ячейку с учетом смещения от ранее вставленных строк
+                                        cell = worksheet.cell(
+                                            row=row_num + rows_inserted,
+                                            column=excel_price_col,
+                                        )
+                                        cell.value = price_value
+
+                                        # Убираем избыточное логирование записи цены
+                                    except (ValueError, TypeError) as e:
+                                        self.log_error(
+                                            f"❌ Ошибка преобразования цены '{supplier_price}': {e}"
+                                        )
+                                else:
+                                    self.log_info(
+                                        f"⚠️ Столбец цены '{excel_price_col_name}' не найден в Excel"
+                                    )
+                            else:
+                                self.log_info(
+                                    f"❌ Маппинг для внутреннего названия цены '{supplier_price_col}' не найден в конфигурации"
+                                )
+
+                            # Заполняем название товара (если есть)
+                            # Проверяем наличие названия товара
+                            if "name" in match_data:
+                                # Проверяем маппинг для названия
+                                name_mapping_found = any(
+                                    internal_name == "name"
+                                    for internal_name in base_config.get(
+                                        "column_mapping", {}
+                                    ).values()
+                                )
+
+                            # Получаем название колонки "name" из маппинга
+                            excel_name_col_name = None
+                            for excel_name, internal_name in base_config.get(
+                                "column_mapping", {}
+                            ).items():
+                                if internal_name == "name":
+                                    excel_name_col_name = excel_name
+                                    break
+
+                            if "name" in match_data and excel_name_col_name is not None:
+                                # Убираем избыточное логирование найденного маппинга названия
+                                excel_name_col = None
+
+                                # Ищем столбец названия в Excel
+                                # Убираем избыточное логирование поиска столбца названия
+
+                                for header_name, col_num in headers.items():
+                                    if (
+                                        header_name
+                                        == excel_name_col_name.lower().strip()
+                                    ):
+                                        excel_name_col = col_num
+                                        # Убираем избыточное логирование найденного столбца названия
+                                        break
+
+                                if excel_name_col is not None:
+                                    name_value = str(match_data["name"])
+                                    # Убираем избыточное логирование значения названия
+
+                                    # Записываем название в ячейку с учетом смещения от ранее вставленных строк
+                                    cell = worksheet.cell(
+                                        row=row_num + rows_inserted,
+                                        column=excel_name_col,
+                                    )
+                                    cell.value = name_value
+
+                                    # Убираем избыточное логирование записи названия
+                                else:
+                                    self.log_info(
+                                        f"⚠️ Столбец названия '{excel_name_col_name}' не найден в Excel"
+                                    )
+                            else:
+                                if "name" not in match_data:
+                                    self.log_info(
+                                        "ℹ️ Название товара отсутствует в данных"
+                                    )
+                                if excel_name_col_name is None:
+                                    self.log_info(
+                                        "ℹ️ Маппинг для названия 'name' отсутствует в конфигурации"
+                                    )
+
+                            # Заполняем цвет товара (если есть)
+                            # Проверяем наличие цвета товара
+                            if "color" in match_data:
+                                # Проверяем маппинг для цвета
+                                color_mapping_found = any(
+                                    internal_name == "color"
+                                    for internal_name in base_config.get(
+                                        "column_mapping", {}
+                                    ).values()
+                                )
+
+                            # Получаем название колонки "color" из маппинга
+                            excel_color_col_name = None
+                            for excel_name, internal_name in base_config.get(
+                                "column_mapping", {}
+                            ).items():
+                                if internal_name == "color":
+                                    excel_color_col_name = excel_name
+                                    break
+
+                            if (
+                                "color" in match_data
+                                and excel_color_col_name is not None
+                            ):
+                                # Убираем избыточное логирование найденного маппинга цвета
+                                excel_color_col = None
+
+                                # Ищем столбец цвета в Excel
+                                # Убираем избыточное логирование поиска столбца цвета
+
+                                for header_name, col_num in headers.items():
+                                    if (
+                                        header_name
+                                        == excel_color_col_name.lower().strip()
+                                    ):
+                                        excel_color_col = col_num
+                                        # Убираем избыточное логирование найденного столбца цвета
+                                        break
+
+                                if excel_color_col is not None:
+                                    # Обрабатываем цвет через безопасную функцию
+                                    color_value = self.safe_color_processing(
+                                        match_data["color"]
+                                    )
+                                    # Убираем избыточное логирование обработанного значения цвета
+
+                                    # Определяем тип данных для столбца цвета
+                                    data_type = self.get_column_data_type("color")
+                                    # Убираем избыточное логирование типа данных для цвета
+
+                                    try:
+                                        # Преобразуем значение к нужному типу
+                                        if data_type == "int":
+                                            final_color_value = (
+                                                int(color_value)
+                                                if color_value.isdigit()
+                                                else 0
+                                            )
+                                        elif data_type == "float":
+                                            final_color_value = (
+                                                float(color_value)
+                                                if color_value.replace(
+                                                    ".", ""
+                                                ).isdigit()
+                                                else 0.0
+                                            )
+                                        else:
+                                            final_color_value = str(color_value)
+
+                                        # Убираем избыточное логирование преобразованного значения цвета
+
+                                        # Записываем цвет в ячейку с учетом смещения от ранее вставленных строк
+                                        cell = worksheet.cell(
+                                            row=row_num + rows_inserted,
+                                            column=excel_color_col,
+                                        )
+                                        cell.value = final_color_value
+
+                                        # Убираем избыточное логирование записи цвета
+                                    except (ValueError, TypeError) as e:
+                                        self.log_error(
+                                            f"❌ Ошибка преобразования цвета '{color_value}': {e}"
+                                        )
+                                else:
+                                    self.log_info(
+                                        f"⚠️ Столбец цвета '{excel_color_col_name}' не найден в Excel"
+                                    )
+                            else:
+                                if "color" not in match_data:
+                                    self.log_info("ℹ️ Цвет товара отсутствует в данных")
+                                if excel_color_col_name is None:
+                                    self.log_info(
+                                        "ℹ️ Маппинг для цвета 'color' отсутствует в конфигурации"
+                                    )
+
+                            # Автоматически добавляем артикул в столбец "Артикул" (маппинг на "article")
+                            if "артикул" in headers and max_article_number > 0:
+                                article_col = headers["артикул"]
+                                new_article_number = (
+                                    max_article_number + 1
+                                )  # Просто увеличиваем на 1
+
+                                self.log_info(
+                                    f"🔢 Генерируем новый артикул: {new_article_number} (максимальный: {max_article_number} + 1)"
+                                )
+
+                                try:
+                                    # Записываем новый артикул в ячейку с учетом смещения от ранее вставленных строк
+                                    cell = worksheet.cell(
+                                        row=row_num + rows_inserted,
+                                        column=article_col,
+                                    )
+                                    cell.value = new_article_number
+
+                                    # Убираем избыточное логирование записи нового артикула
+
+                                    # Обновляем максимальный артикул для следующего товара
+                                    max_article_number = new_article_number
+
+                                except Exception as e:
+                                    self.log_error(
+                                        f"❌ Ошибка записи нового артикула '{new_article_number}': {e}"
+                                    )
+                            else:
+                                self.log_info(
+                                    "⚠️ Автоматическая нумерация артикулов отключена (столбец 'Артикул' не найден или максимальный артикул = 0)"
+                                )
+
+                            self.log_info(
+                                f"✅ Товар '{match_data.get('name', 'N/A')}' (артикул: {supplier_article}, цвет: {supplier_color}) добавлен в строку {row_num +  rows_inserted}"
+                            )
+
+                        except Exception as e:
+                            self.log_error(
+                                f"❌ Ошибка добавления товара в строку {row_num + 1 + rows_inserted}: {e}"
+                            )
+                            continue
 
                     # Обновляем прогресс каждые 5 строк
                     if i % 5 == 0 or i == len(sorted_rows):
@@ -7198,9 +7950,14 @@ class MiStockSyncApp:
             if rows_inserted > 0:
                 try:
                     workbook.save(file_path)
-                    self.log_info(
-                        f"💾 Вставлено {rows_inserted} пустых строк в Excel файл"
-                    )
+                    if selected_new_items:
+                        self.log_info(
+                            f"💾 Вставлено {rows_inserted} строк с товарами в Excel файл"
+                        )
+                    else:
+                        self.log_info(
+                            f"💾 Вставлено {rows_inserted} пустых строк в Excel файл"
+                        )
                 except Exception as save_error:
                     self.log_error(f"❌ Ошибка сохранения файла: {save_error}")
                     raise
@@ -7210,16 +7967,291 @@ class MiStockSyncApp:
             # Закрываем workbook
             workbook.close()
 
+            # Логируем основной результат
+            self.log_info(
+                f"✅ Успешно вставлено {rows_inserted} строк в файл {file_path}"
+            )
+
+            # Возвращаем количество успешно вставленных строк
+            # rows_inserted: int - количество строк, которые были добавлены в Excel файл
+            return rows_inserted
+
         except Exception as e:
-            self.log_error(f"❌ Ошибка вставки пустых строк в Excel: {e}")
+            self.log_error(f"❌ Ошибка вставки строк в Excel файл {file_path}: {e}")
             raise
+
+    def test_base_duplicates(self):
+        """Тестирование базы данных на дубликаты артикулов"""
+        try:
+            if self.base_df is None:
+                messagebox.showwarning(
+                    "Предупреждение", "Сначала загрузите базу данных"
+                )
+                return
+
+            self.log_info("🔍 Начинаем тестирование базы на дубликаты артикулов...")
+
+            # Создаем окно для результатов
+            test_window = tk.Toplevel(self.root)
+            test_window.title("Тест базы данных - Поиск дубликатов")
+            test_window.geometry("800x600")
+
+            # Основной фрейм
+            main_frame = ttk.Frame(test_window)
+            main_frame.pack(fill="both", expand=True, padx=10, pady=10)
+
+            # Заголовок
+            title_label = ttk.Label(
+                main_frame,
+                text="🔍 Тестирование базы данных на дубликаты артикулов",
+                font=("Arial", 14, "bold"),
+            )
+            title_label.pack(pady=(0, 20))
+
+            # Фрейм для результатов
+            results_frame = ttk.Frame(main_frame)
+            results_frame.pack(fill="both", expand=True)
+
+            # Создаем Treeview для отображения дубликатов
+            columns = (
+                "column",
+                "duplicate_count",
+                "duplicate_items",
+                "sample_articles",
+            )
+            tree = ttk.Treeview(
+                results_frame, columns=columns, show="headings", height=15
+            )
+
+            # Настройка колонок
+            tree.heading("column", text="Столбец")
+            tree.column("column", width=150, minwidth=100)
+
+            tree.heading("duplicate_count", text="Количество дубликатов")
+            tree.column("duplicate_count", width=150, minwidth=100)
+
+            tree.heading("duplicate_items", text="Дублирующиеся артикулы")
+            tree.column("duplicate_items", width=200, minwidth=150)
+
+            tree.heading("sample_articles", text="Примеры дубликатов")
+            tree.column("sample_articles", width=250, minwidth=200)
+
+            # Скроллбары
+            v_scrollbar = ttk.Scrollbar(
+                results_frame, orient="vertical", command=tree.yview
+            )
+            h_scrollbar = ttk.Scrollbar(
+                results_frame, orient="horizontal", command=tree.xview
+            )
+            tree.configure(
+                yscrollcommand=v_scrollbar.set, xscrollcommand=h_scrollbar.set
+            )
+
+            # Упаковываем Treeview и скроллбары
+            tree.grid(row=0, column=0, sticky="nsew")
+            v_scrollbar.grid(row=0, column=1, sticky="ns")
+            h_scrollbar.grid(row=1, column=0, sticky="ew")
+
+            results_frame.grid_rowconfigure(0, weight=1)
+            results_frame.grid_columnconfigure(0, weight=1)
+
+            # Кнопки
+            button_frame = ttk.Frame(main_frame)
+            button_frame.pack(fill="x", pady=(20, 0))
+
+            ttk.Button(
+                button_frame,
+                text="🔄 Обновить тест",
+                command=lambda: self.run_base_test(tree),
+            ).pack(side="left", padx=5)
+
+            ttk.Button(
+                button_frame,
+                text="📋 Экспорт результатов",
+                command=lambda: self.export_test_results(tree),
+            ).pack(side="left", padx=5)
+
+            ttk.Button(
+                button_frame, text="❌ Закрыть", command=test_window.destroy
+            ).pack(side="right", padx=5)
+
+            # Запускаем тест
+            self.run_base_test(tree)
+
+        except Exception as e:
+            self.log_error(f"❌ Ошибка при тестировании базы: {e}")
+            messagebox.showerror("Ошибка", f"Произошла ошибка при тестировании: {e}")
+
+    def run_base_test(self, tree):
+        """Запуск теста базы данных"""
+        try:
+            # Очищаем предыдущие результаты
+            for item in tree.get_children():
+                tree.delete(item)
+
+            self.log_info("🔍 Запуск теста базы данных...")
+
+            # Список столбцов для проверки
+            columns_to_check = [
+                ("Артикул", "article"),
+                ("Артикул Вити", "article_vitya"),
+                ("Артикул Дими", "article_dimi"),
+                ("Артикул Милы", "article_mila"),
+            ]
+
+            total_duplicates = 0
+
+            for display_name, column_name in columns_to_check:
+                if column_name in self.base_df.columns:
+                    duplicates = self.find_duplicates_in_column(
+                        column_name, display_name
+                    )
+                    if duplicates:
+                        total_duplicates += len(duplicates)
+
+                        # Группируем дубликаты по артикулу
+                        duplicate_groups = {}
+                        for item in duplicates:
+                            article = item["article"]
+                            if article not in duplicate_groups:
+                                duplicate_groups[article] = []
+                            duplicate_groups[article].append(item)
+
+                        # Добавляем в дерево
+                        for article, items in duplicate_groups.items():
+                            sample_articles = ", ".join(
+                                [f"строка {item['row']}" for item in items[:3]]
+                            )
+                            if len(items) > 3:
+                                sample_articles += f" и еще {len(items) - 3}..."
+
+                            tree.insert(
+                                "",
+                                "end",
+                                values=(
+                                    display_name,
+                                    len(items),
+                                    article,
+                                    sample_articles,
+                                ),
+                            )
+
+            # Добавляем итоговую строку
+            if total_duplicates > 0:
+                tree.insert(
+                    "",
+                    "end",
+                    values=(
+                        "ИТОГО",
+                        total_duplicates,
+                        f"Найдено дубликатов",
+                        f"в {len([c for c in columns_to_check if c[1] in self.base_df.columns])} столбцах",
+                    ),
+                )
+            else:
+                tree.insert(
+                    "",
+                    "end",
+                    values=("ИТОГО", 0, "Дубликаты не найдены", "База данных чистая"),
+                )
+
+            self.log_info(f"✅ Тест завершен. Найдено дубликатов: {total_duplicates}")
+
+        except Exception as e:
+            self.log_error(f"❌ Ошибка при запуске теста: {e}")
+            messagebox.showerror("Ошибка", f"Ошибка при запуске теста: {e}")
+
+    def find_duplicates_in_column(self, column_name, display_name):
+        """Поиск дубликатов в указанном столбце"""
+        try:
+            duplicates = []
+
+            # Получаем значения столбца, исключая пустые
+            column_data = self.base_df[column_name].dropna()
+
+            # Находим дубликаты
+            duplicate_values = column_data[column_data.duplicated(keep=False)]
+
+            if not duplicate_values.empty:
+                # Группируем по значению и находим индексы
+                for value in duplicate_values.unique():
+                    if pd.notna(value) and str(value).strip() not in [
+                        "",
+                        "nan",
+                        "None",
+                    ]:
+                        indices = self.base_df[
+                            self.base_df[column_name] == value
+                        ].index.tolist()
+                        if len(indices) > 1:  # Только если больше одного
+                            for idx in indices:
+                                duplicates.append(
+                                    {
+                                        "article": str(value),
+                                        "row": idx
+                                        + 2,  # +2 для Excel (заголовок + индексация)
+                                        "row_index": idx,
+                                        "value": value,
+                                    }
+                                )
+
+            if duplicates:
+                self.log_info(
+                    f"🔍 В столбце '{display_name}' найдено {len(duplicates)} дубликатов"
+                )
+
+            return duplicates
+
+        except Exception as e:
+            self.log_error(
+                f"❌ Ошибка при поиске дубликатов в столбце {column_name}: {e}"
+            )
+            return []
+
+    def export_test_results(self, tree):
+        """Экспорт результатов теста в файл"""
+        try:
+            # Получаем данные из дерева
+            data = []
+            for item in tree.get_children():
+                values = tree.item(item)["values"]
+                if values[0] != "ИТОГО":  # Пропускаем итоговую строку
+                    data.append(
+                        {
+                            "Столбец": values[0],
+                            "Количество дубликатов": values[1],
+                            "Дублирующиеся артикулы": values[2],
+                            "Примеры дубликатов": values[3],
+                        }
+                    )
+
+            if not data:
+                messagebox.showinfo("Информация", "Нет данных для экспорта")
+                return
+
+            # Создаем DataFrame
+            df = pd.DataFrame(data)
+
+            # Генерируем имя файла
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            filename = f"test_results_{timestamp}.xlsx"
+
+            # Сохраняем в Excel
+            df.to_excel(filename, index=False, sheet_name="Дубликаты артикулов")
+
+            self.log_info(f"💾 Результаты теста экспортированы в файл: {filename}")
+            messagebox.showinfo(
+                "Экспорт завершен", f"Результаты теста сохранены в файл:\n{filename}"
+            )
+
+        except Exception as e:
+            self.log_error(f"❌ Ошибка при экспорте результатов: {e}")
+            messagebox.showerror("Ошибка", f"Ошибка при экспорте: {e}")
 
 
 def main():
     """Главная функция приложения"""
-    # Базовое логирование для main функции
-    print("🚀 Запуск MiStockSync GUI...")
-    print("📋 Инициализация интерфейса...")
+    # Инициализация приложения
 
     root = tk.Tk()
 
@@ -7229,12 +8261,12 @@ def main():
 
         icon = ImageTk.PhotoImage(Image.open("assets/icon.png"))
         root.iconphoto(False, icon)
-        print("✅ Иконка приложения загружена")
-    except Exception as e:
-        print(f"⚠️ Не удалось загрузить иконку: {e}")
+    except Exception:
+        # Иконка не загружена, пропускаем
+        pass
 
     # Устанавливаем заголовок
-    root.title("🚀 MiStockSync - Управление прайсами")
+    root.title("🚀 MiStockSync v0.9.8 - Управление прайсами")
 
     app = MiStockSyncApp(root)
 
@@ -7254,15 +8286,12 @@ def main():
         x = (root.winfo_screenwidth() // 2) - (current_width // 2)
         y = (root.winfo_screenheight() // 2) - (current_height // 2)
         root.geometry(f"{current_width}x{current_height}+{x}+{y}")
-        app.log_info("🎯 Окно отцентрировано (использованы размеры по умолчанию)")
+        app.log_info("🎯 Окно отцентрировано")
     else:
         # Размеры загружены из конфигурации - центрируем по текущим размерам
         x = (root.winfo_screenwidth() // 2) - (current_width // 2)
         y = (root.winfo_screenheight() // 2) - (current_height // 2)
         root.geometry(f"+{x}+{y}")  # Только позиция, размер уже установлен
-        app.log_info(
-            f"📐 Размеры окна загружены из конфигурации: {current_width}x{current_height}"
-        )
 
     # Добавляем обработчик закрытия окна
     def on_closing():
@@ -7271,7 +8300,6 @@ def main():
     root.protocol("WM_DELETE_WINDOW", on_closing)
 
     app.logger.info("🖥️ GUI интерфейс готов к работе")
-    print("✅ Приложение готово к работе!")
 
     root.mainloop()
 
