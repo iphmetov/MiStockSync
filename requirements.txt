@@ -1,7 +1,6 @@
 # Зависимости для MiStockSync GUI приложения
 
 # Основные библиотеки
-
 et-xmlfile==2.0.0
 numpy==2.3.1
 openpyxl>=3.0.0
@@ -11,5 +10,9 @@ pytz==2025.2
 six==1.17.0
 tzdata==2025.2
 Pillow>=9.0.0
+
+# Нечеткое сопоставление строк
+fuzzywuzzy>=0.18.0
+python-Levenshtein>=0.21.0  # Ускоряет работу fuzzywuzzy
 
 # Примечание: tkinter встроен в Python, установки не требует
